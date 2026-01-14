@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass
 
 from .recipe_parser import Ingredient, Recipe
+from .units import calculate_packages_needed
 
 
 @dataclass
@@ -210,13 +211,23 @@ def scale_recipe(
 
 
 def calculate_product_quantity(
-    scaled_quantity: float | None, product_unit_size: str | None = None
+    scaled_quantity: float | None,
+    ingredient_unit: str | None = None,
+    product_unit_size: str | None = None,
 ) -> int:
     """
     Calculate how many product units to buy for a scaled ingredient.
 
+    Uses unit-aware calculation when possible. For example:
+    - Need 400g pasta, package is 500g → 1 package
+    - Need 750g flour, package is 500g → 2 packages
+    - Need 1.5L milk, package is 1L → 2 packages
+
+    Falls back to simple ceiling when units are incompatible or missing.
+
     Args:
         scaled_quantity: The scaled ingredient quantity needed
+        ingredient_unit: The unit from the recipe (e.g., "g", "ml", "stk")
         product_unit_size: The product's unit size (e.g., "500g", "1L")
 
     Returns:
@@ -225,8 +236,13 @@ def calculate_product_quantity(
     if scaled_quantity is None:
         return 1
 
-    # For now, simple ceiling - could be enhanced to parse product_unit_size
-    # and calculate based on actual package sizes
+    # Try unit-aware calculation first
+    if ingredient_unit and product_unit_size:
+        packages = calculate_packages_needed(scaled_quantity, ingredient_unit, product_unit_size)
+        if packages > 0:
+            return packages
+
+    # Fallback: simple ceiling (for incompatible units or missing info)
     return max(1, math.ceil(scaled_quantity))
 
 

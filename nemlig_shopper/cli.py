@@ -283,10 +283,18 @@ def search(query: str, limit: int):
 @click.argument("url")
 @click.option("--scale", "-s", type=float, help="Scale recipe by multiplier")
 @click.option("--servings", "-S", type=int, help="Scale to target servings")
+@click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
+@click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 @click.option("--save-as", help="Save as favorite with this name")
 def add_to_cart(
-    url: str, scale: float | None, servings: int | None, yes: bool, save_as: str | None
+    url: str,
+    scale: float | None,
+    servings: int | None,
+    organic: bool,
+    budget: bool,
+    yes: bool,
+    save_as: str | None,
 ):
     """Parse a recipe and add matched products to cart."""
     api = get_api()
@@ -308,9 +316,15 @@ def add_to_cart(
             scale_info = format_scale_info(factor, recipe.servings, new_servings)
             click.echo(f"Scaling: {scale_info}")
 
+        # Show preference mode
+        if organic:
+            click.echo("Mode: Preferring organic products")
+        if budget:
+            click.echo("Mode: Preferring budget-friendly products")
+
         # Match ingredients to products
         click.echo("Matching ingredients to products...")
-        matches = match_ingredients(api, scaled_ings)
+        matches = match_ingredients(api, scaled_ings, prefer_organic=organic, prefer_budget=budget)
 
         display_matches(matches, show_alternatives=True)
 
@@ -461,9 +475,19 @@ def favorites_delete(name: str, yes: bool):
 @click.argument("name")
 @click.option("--scale", "-s", type=float, help="Scale recipe by multiplier")
 @click.option("--servings", "-S", type=int, help="Scale to target servings")
+@click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
+@click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 @click.option("--rematch", is_flag=True, help="Re-match products instead of using saved matches")
-def favorites_order(name: str, scale: float | None, servings: int | None, yes: bool, rematch: bool):
+def favorites_order(
+    name: str,
+    scale: float | None,
+    servings: int | None,
+    organic: bool,
+    budget: bool,
+    yes: bool,
+    rematch: bool,
+):
     """Order a favorite recipe to cart."""
     api = get_api()
 
@@ -485,15 +509,25 @@ def favorites_order(name: str, scale: float | None, servings: int | None, yes: b
             scale_info = format_scale_info(factor, recipe.servings, new_servings)
             click.echo(f"Scaling: {scale_info}")
 
+        # Show preference mode
+        if organic:
+            click.echo("Mode: Preferring organic products")
+        if budget:
+            click.echo("Mode: Preferring budget-friendly products")
+
         # Use saved matches or re-match
-        if not rematch and favorite.get("product_matches") and factor == 1.0:
+        # Force rematch if organic/budget preferences are set
+        force_rematch = rematch or organic or budget
+        if not force_rematch and favorite.get("product_matches") and factor == 1.0:
             # Use saved product IDs (quick re-order)
             click.echo("Using saved product matches...")
             cart_items = get_favorite_product_ids(name)
         else:
-            # Re-match products (needed for scaling or if no saved matches)
+            # Re-match products (needed for scaling, preferences, or if no saved matches)
             click.echo("Matching ingredients to products...")
-            matches = match_ingredients(api, scaled_ings)
+            matches = match_ingredients(
+                api, scaled_ings, prefer_organic=organic, prefer_budget=budget
+            )
             display_matches(matches)
 
             cart_items = prepare_cart_items(matches)
@@ -532,7 +566,9 @@ def favorites_order(name: str, scale: float | None, servings: int | None, yes: b
 
 @favorites.command("update")
 @click.argument("name")
-def favorites_update(name: str):
+@click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
+@click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
+def favorites_update(name: str, organic: bool, budget: bool):
     """Re-match products for a saved favorite."""
     api = get_api()
 
@@ -541,11 +577,17 @@ def favorites_update(name: str):
 
         click.echo(f"Re-matching products for: {recipe.title}")
 
+        # Show preference mode
+        if organic:
+            click.echo("Mode: Preferring organic products")
+        if budget:
+            click.echo("Mode: Preferring budget-friendly products")
+
         # Scale with factor 1.0 (no scaling)
         scaled_ings, _, _ = scale_recipe(recipe)
 
         # Match products
-        matches = match_ingredients(api, scaled_ings)
+        matches = match_ingredients(api, scaled_ings, prefer_organic=organic, prefer_budget=budget)
         display_matches(matches)
 
         # Save matches

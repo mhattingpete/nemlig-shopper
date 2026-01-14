@@ -243,17 +243,27 @@ def translate_ingredient(name: str) -> str | None:
     return None
 
 
-def score_product_match(product: dict[str, Any], ingredient_name: str, search_query: str) -> int:
+def score_product_match(
+    product: dict[str, Any],
+    ingredient_name: str,
+    search_query: str,
+    *,
+    prefer_organic: bool = False,
+    prefer_budget: bool = False,
+) -> int:
     """
     Score a product match based on relevance to the ingredient.
 
     Higher scores indicate better matches. Products that the user has
     previously purchased receive a boost to prefer familiar items.
+    Out-of-stock products are heavily penalized.
 
     Args:
         product: Product dict from API
         ingredient_name: Original ingredient name
         search_query: The query used to find this product
+        prefer_organic: Boost organic products (+50 score)
+        prefer_budget: Prefer cheaper products based on unit price
 
     Returns:
         Integer score (higher is better)
@@ -264,10 +274,46 @@ def score_product_match(product: dict[str, Any], ingredient_name: str, search_qu
     ingredient_lower = ingredient_name.lower()
     query_lower = search_query.lower()
 
+    # Heavily penalize out-of-stock products
+    if not product.get("available", True):
+        score -= 200
+
     # Boost products the user has purchased before
     product_id = product.get("id")
     if product_id and is_preferred_product(product_id):
         score += 75
+
+    # Organic preference: boost products with organic indicators
+    if prefer_organic:
+        # Check product name for "øko" (Danish organic prefix)
+        if "øko" in product_name:
+            score += 50
+        # Check labels array for "Økologisk"
+        labels = product.get("labels", [])
+        if isinstance(labels, list):
+            for label in labels:
+                if isinstance(label, str) and "økologisk" in label.lower():
+                    score += 50
+                    break
+                elif isinstance(label, dict) and "økologisk" in label.get("name", "").lower():
+                    score += 50
+                    break
+
+    # Budget preference: prefer lower unit prices
+    if prefer_budget:
+        unit_price = product.get("unit_price_calc") or product.get("unit_price")
+        if unit_price:
+            try:
+                # Lower unit price = higher score
+                # Scale: 10 DKK/unit = 0 bonus, 5 DKK/unit = +25 bonus, 1 DKK/unit = +45 bonus
+                price_val = float(unit_price) if isinstance(unit_price, int | float | str) else 0
+                if price_val > 0:
+                    # Inverse relationship: lower price = higher bonus
+                    # Cap at 50 bonus for very cheap items
+                    budget_bonus = min(50, int(50 * (1 - min(price_val, 20) / 20)))
+                    score += budget_bonus
+            except (ValueError, TypeError):
+                pass
 
     # Penalize non-food categories heavily
     if category in NON_FOOD_CATEGORIES:
@@ -402,7 +448,14 @@ def generate_search_queries(ingredient_name: str) -> list[str]:
 
 
 def match_ingredient(
-    api: NemligAPI, ingredient_name: str, quantity: float | None = None, max_alternatives: int = 3
+    api: NemligAPI,
+    ingredient_name: str,
+    quantity: float | None = None,
+    ingredient_unit: str | None = None,
+    max_alternatives: int = 3,
+    *,
+    prefer_organic: bool = False,
+    prefer_budget: bool = False,
 ) -> ProductMatch:
     """
     Find matching products for a single ingredient.
@@ -411,12 +464,18 @@ def match_ingredient(
     - Danish translations of English ingredients
     - Food categories over non-food categories
     - Products where the ingredient name appears in the product name
+    - Available products over out-of-stock ones
+    - Organic products (if prefer_organic=True)
+    - Cheaper products (if prefer_budget=True)
 
     Args:
         api: NemligAPI instance
         ingredient_name: Name of ingredient to match
         quantity: Scaled quantity needed
+        ingredient_unit: Unit from recipe (e.g., "g", "ml") for package calculation
         max_alternatives: Maximum alternative products to return
+        prefer_organic: Boost organic products in scoring
+        prefer_budget: Boost cheaper products in scoring
 
     Returns:
         ProductMatch with best match and alternatives
@@ -444,16 +503,17 @@ def match_ingredient(
         except NemligAPIError:
             continue
 
-    # Calculate quantity to buy
-    qty_to_buy = calculate_product_quantity(quantity)
-
     if all_products:
         # Score and sort products by relevance
         scored_products = [
             (
                 product,
                 score_product_match(
-                    product, ingredient_name, product.get("_search_query", used_query)
+                    product,
+                    ingredient_name,
+                    product.get("_search_query", used_query),
+                    prefer_organic=prefer_organic,
+                    prefer_budget=prefer_budget,
                 ),
             )
             for product in all_products
@@ -470,6 +530,10 @@ def match_ingredient(
         best_match = sorted_products[0]
         alternatives = sorted_products[1 : max_alternatives + 1]
 
+        # Calculate quantity using product's unit_size for accurate package count
+        product_unit_size = best_match.get("unit_size")
+        qty_to_buy = calculate_product_quantity(quantity, ingredient_unit, product_unit_size)
+
         return ProductMatch(
             ingredient_name=ingredient_name,
             product=best_match,
@@ -479,6 +543,8 @@ def match_ingredient(
             alternatives=alternatives,
         )
 
+    # No products found - use fallback quantity calculation
+    qty_to_buy = calculate_product_quantity(quantity, ingredient_unit, None)
     return ProductMatch(
         ingredient_name=ingredient_name,
         product=None,
@@ -490,7 +556,12 @@ def match_ingredient(
 
 
 def match_ingredients(
-    api: NemligAPI, scaled_ingredients: list[ScaledIngredient], max_alternatives: int = 3
+    api: NemligAPI,
+    scaled_ingredients: list[ScaledIngredient],
+    max_alternatives: int = 3,
+    *,
+    prefer_organic: bool = False,
+    prefer_budget: bool = False,
 ) -> list[ProductMatch]:
     """
     Match all ingredients to products.
@@ -499,6 +570,8 @@ def match_ingredients(
         api: NemligAPI instance
         scaled_ingredients: List of scaled ingredients
         max_alternatives: Maximum alternatives per ingredient
+        prefer_organic: Boost organic products in scoring
+        prefer_budget: Boost cheaper products in scoring
 
     Returns:
         List of ProductMatch objects
@@ -506,7 +579,15 @@ def match_ingredients(
     matches = []
 
     for ingredient in scaled_ingredients:
-        match = match_ingredient(api, ingredient.name, ingredient.scaled_quantity, max_alternatives)
+        match = match_ingredient(
+            api,
+            ingredient.name,
+            ingredient.scaled_quantity,
+            ingredient.unit,
+            max_alternatives,
+            prefer_organic=prefer_organic,
+            prefer_budget=prefer_budget,
+        )
         matches.append(match)
 
     return matches
