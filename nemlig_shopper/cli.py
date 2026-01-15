@@ -4,6 +4,7 @@ import click
 
 from .api import NemligAPI, NemligAPIError
 from .config import clear_credentials, get_credentials, save_credentials
+from .export import export_shopping_list
 from .favorites import (
     FavoritesError,
     delete_favorite,
@@ -503,6 +504,82 @@ def plan_meals(
         click.echo(f"\n✓ Added {success_count} products to cart")
         if fail_count:
             click.echo(f"✗ Failed to add {fail_count} products")
+
+    except ImportError as e:
+        click.echo(f"✗ {e}", err=True)
+        raise SystemExit(1) from None
+    except Exception as e:
+        click.echo(f"✗ Error: {e}", err=True)
+        raise SystemExit(1) from None
+
+
+# ============================================================================
+# Export Commands
+# ============================================================================
+
+
+@cli.command("export")
+@click.argument("url")
+@click.argument("output", type=click.Path())
+@click.option("--format", "-f", type=click.Choice(["json", "md", "pdf"]), help="Output format")
+@click.option("--scale", "-s", type=float, help="Scale recipe by multiplier")
+@click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
+@click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
+@click.option("--alternatives", "-a", is_flag=True, help="Include alternative products")
+def export_list(
+    url: str,
+    output: str,
+    format: str | None,
+    scale: float | None,
+    organic: bool,
+    budget: bool,
+    alternatives: bool,
+):
+    """Export a recipe's shopping list to a file.
+
+    Parses a recipe, matches products, and exports to JSON, Markdown, or PDF.
+
+    Examples:
+
+        nemlig export https://recipe.com shopping-list.md
+
+        nemlig export https://recipe.com list.json --alternatives
+
+        nemlig export https://recipe.com list.pdf --organic --scale 2
+    """
+    api = get_api()
+
+    try:
+        # Parse recipe
+        click.echo(f"Parsing recipe from: {url}")
+        recipe = parse_recipe_url(url)
+
+        # Scale if requested
+        scaled_ings, factor, _ = scale_recipe(recipe, multiplier=scale)
+
+        if factor != 1.0:
+            click.echo(f"Scaling: {factor}x")
+
+        # Show preference mode
+        if organic:
+            click.echo("Mode: Preferring organic products")
+        if budget:
+            click.echo("Mode: Preferring budget-friendly products")
+
+        # Match ingredients
+        click.echo("Matching ingredients to products...")
+        matches = match_ingredients(api, scaled_ings, prefer_organic=organic, prefer_budget=budget)
+
+        # Export
+        used_format = export_shopping_list(
+            matches,
+            output,
+            recipe_title=recipe.title,
+            format=format,
+            include_alternatives=alternatives,
+        )
+
+        click.echo(f"✓ Exported to {output} ({used_format} format)")
 
     except ImportError as e:
         click.echo(f"✗ {e}", err=True)
