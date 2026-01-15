@@ -36,6 +36,7 @@ from .preferences import (
 )
 from .recipe_parser import Recipe, parse_recipe_text, parse_recipe_url
 from .scaler import format_scale_info, scale_recipe
+from .tui import interactive_review
 
 # Shared API instance
 _api: NemligAPI | None = None
@@ -291,6 +292,7 @@ def search(query: str, limit: int):
 @click.option("--servings", "-S", type=int, help="Scale to target servings")
 @click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
 @click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
+@click.option("--interactive", "-i", is_flag=True, help="Interactive review with TUI")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 @click.option("--save-as", help="Save as favorite with this name")
 def add_to_cart(
@@ -299,6 +301,7 @@ def add_to_cart(
     servings: int | None,
     organic: bool,
     budget: bool,
+    interactive: bool,
     yes: bool,
     save_as: str | None,
 ):
@@ -332,20 +335,28 @@ def add_to_cart(
         click.echo("Matching ingredients to products...")
         matches = match_ingredients(api, scaled_ings, prefer_organic=organic, prefer_budget=budget)
 
-        display_matches(matches, show_alternatives=True)
-
-        # Check for unmatched
-        unmatched = get_unmatched_ingredients(matches)
-        if unmatched:
-            click.echo(f"\n⚠ {len(unmatched)} ingredients could not be matched:")
-            for name in unmatched:
-                click.echo(f"  - {name}")
-
-        # Confirm
-        if not yes:
-            if not click.confirm("\nAdd matched products to cart?"):
+        # Interactive mode: use TUI for review
+        if interactive:
+            review_result = interactive_review(matches, recipe.title)
+            if not review_result.confirmed:
                 click.echo("Cancelled.")
                 return
+            matches = review_result.matches
+        else:
+            display_matches(matches, show_alternatives=True)
+
+            # Check for unmatched
+            unmatched = get_unmatched_ingredients(matches)
+            if unmatched:
+                click.echo(f"\n⚠ {len(unmatched)} ingredients could not be matched:")
+                for name in unmatched:
+                    click.echo(f"  - {name}")
+
+            # Confirm
+            if not yes:
+                if not click.confirm("\nAdd matched products to cart?"):
+                    click.echo("Cancelled.")
+                    return
 
         # Add to cart
         cart_items = prepare_cart_items(matches)
@@ -402,12 +413,14 @@ def display_meal_plan(plan: MealPlan) -> None:
 @click.option("--file", "-f", "file_path", type=click.Path(exists=True), help="Load URLs from file")
 @click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
 @click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
+@click.option("--interactive", "-i", is_flag=True, help="Interactive review with TUI")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 def plan_meals(
     urls: tuple[str, ...],
     file_path: str | None,
     organic: bool,
     budget: bool,
+    interactive: bool,
     yes: bool,
 ):
     """Plan meals from multiple recipe URLs.
@@ -479,20 +492,28 @@ def plan_meals(
 
         matches = match_ingredients(api, scaled_ings, prefer_organic=organic, prefer_budget=budget)
 
-        display_matches(matches, show_alternatives=True)
-
-        # Check for unmatched
-        unmatched = get_unmatched_ingredients(matches)
-        if unmatched:
-            click.echo(f"\n⚠ {len(unmatched)} ingredients could not be matched:")
-            for name in unmatched:
-                click.echo(f"  - {name}")
-
-        # Confirm
-        if not yes:
-            if not click.confirm("\nAdd matched products to cart?"):
+        # Interactive mode: use TUI for review
+        if interactive:
+            review_result = interactive_review(matches, f"Meal Plan ({plan.recipe_count} recipes)")
+            if not review_result.confirmed:
                 click.echo("Cancelled.")
                 return
+            matches = review_result.matches
+        else:
+            display_matches(matches, show_alternatives=True)
+
+            # Check for unmatched
+            unmatched = get_unmatched_ingredients(matches)
+            if unmatched:
+                click.echo(f"\n⚠ {len(unmatched)} ingredients could not be matched:")
+                for name in unmatched:
+                    click.echo(f"  - {name}")
+
+            # Confirm
+            if not yes:
+                if not click.confirm("\nAdd matched products to cart?"):
+                    click.echo("Cancelled.")
+                    return
 
         # Add to cart
         cart_items = prepare_cart_items(matches)

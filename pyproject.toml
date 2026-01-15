@@ -26,6 +26,7 @@ dependencies = [
     "click>=8.0.0",
     "python-dotenv>=1.0.0",
     "websockets>=16.0",
+    "textual>=0.50.0",
 ]
 
 [project.scripts]
