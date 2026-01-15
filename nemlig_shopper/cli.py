@@ -78,6 +78,7 @@ def display_matches(matches: list[ProductMatch], show_alternatives: bool = False
 
     matched_count = 0
     unmatched_count = 0
+    dietary_warnings_count = 0
 
     for i, match in enumerate(matches, 1):
         if match.matched:
@@ -86,6 +87,16 @@ def display_matches(matches: list[ProductMatch], show_alternatives: bool = False
             click.echo(f"\n{i}. {match.ingredient_name}")
             click.echo(f"   → {match.product_name} (x{match.quantity})")
             click.echo(f"   Price: {price_str}")
+
+            # Show dietary warnings
+            if not match.is_dietary_safe and match.dietary_warnings:
+                dietary_warnings_count += 1
+                for warning in match.dietary_warnings:
+                    click.echo(f"   ⚠️  {warning}")
+
+            # Show how many products were filtered
+            if match.excluded_count > 0:
+                click.echo(f"   ({match.excluded_count} products excluded due to dietary filters)")
 
             if show_alternatives and match.alternatives:
                 click.echo("   Alternatives:")
@@ -102,6 +113,8 @@ def display_matches(matches: list[ProductMatch], show_alternatives: bool = False
     click.echo()
     click.echo("-" * 60)
     click.echo(f"Matched: {matched_count} | Unmatched: {unmatched_count}")
+    if dietary_warnings_count > 0:
+        click.echo(f"⚠️  Dietary warnings: {dietary_warnings_count}")
 
     total = calculate_total_cost(matches)
     click.echo(f"Estimated total: {total:.2f} DKK")
@@ -292,6 +305,9 @@ def search(query: str, limit: int):
 @click.option("--servings", "-S", type=int, help="Scale to target servings")
 @click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
 @click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
+@click.option("--lactose-free", is_flag=True, help="Filter for lactose-free products")
+@click.option("--gluten-free", is_flag=True, help="Filter for gluten-free products")
+@click.option("--vegan", is_flag=True, help="Filter for vegan products")
 @click.option("--interactive", "-i", is_flag=True, help="Interactive review with TUI")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 @click.option("--save-as", help="Save as favorite with this name")
@@ -301,6 +317,9 @@ def add_to_cart(
     servings: int | None,
     organic: bool,
     budget: bool,
+    lactose_free: bool,
+    gluten_free: bool,
+    vegan: bool,
     interactive: bool,
     yes: bool,
     save_as: str | None,
@@ -310,6 +329,16 @@ def add_to_cart(
 
     if not ensure_logged_in(api):
         raise SystemExit(1)
+
+    # Build dietary filter lists
+    allergies: list[str] = []
+    dietary: list[str] = []
+    if lactose_free:
+        allergies.append("lactose")
+    if gluten_free:
+        allergies.append("gluten")
+    if vegan:
+        dietary.append("vegan")
 
     try:
         # Parse recipe
@@ -330,10 +359,20 @@ def add_to_cart(
             click.echo("Mode: Preferring organic products")
         if budget:
             click.echo("Mode: Preferring budget-friendly products")
+        if allergies or dietary:
+            filters = allergies + dietary
+            click.echo(f"Dietary filters: {', '.join(filters)}")
 
         # Match ingredients to products
         click.echo("Matching ingredients to products...")
-        matches = match_ingredients(api, scaled_ings, prefer_organic=organic, prefer_budget=budget)
+        matches = match_ingredients(
+            api,
+            scaled_ings,
+            prefer_organic=organic,
+            prefer_budget=budget,
+            allergies=allergies if allergies else None,
+            dietary=dietary if dietary else None,
+        )
 
         # Interactive mode: use TUI for review
         if interactive:
@@ -413,6 +452,9 @@ def display_meal_plan(plan: MealPlan) -> None:
 @click.option("--file", "-f", "file_path", type=click.Path(exists=True), help="Load URLs from file")
 @click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
 @click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
+@click.option("--lactose-free", is_flag=True, help="Filter for lactose-free products")
+@click.option("--gluten-free", is_flag=True, help="Filter for gluten-free products")
+@click.option("--vegan", is_flag=True, help="Filter for vegan products")
 @click.option("--interactive", "-i", is_flag=True, help="Interactive review with TUI")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 def plan_meals(
@@ -420,6 +462,9 @@ def plan_meals(
     file_path: str | None,
     organic: bool,
     budget: bool,
+    lactose_free: bool,
+    gluten_free: bool,
+    vegan: bool,
     interactive: bool,
     yes: bool,
 ):
@@ -435,11 +480,23 @@ def plan_meals(
         nemlig plan --file recipes.txt --organic
 
         nemlig plan url1 url2 --budget --yes
+
+        nemlig plan url1 --lactose-free --vegan
     """
     api = get_api()
 
     if not ensure_logged_in(api):
         raise SystemExit(1)
+
+    # Build dietary filter lists
+    allergies: list[str] = []
+    dietary: list[str] = []
+    if lactose_free:
+        allergies.append("lactose")
+    if gluten_free:
+        allergies.append("gluten")
+    if vegan:
+        dietary.append("vegan")
 
     # Collect URLs from arguments and file
     all_urls = list(urls)
@@ -467,6 +524,9 @@ def plan_meals(
             click.echo("Mode: Preferring organic products")
         if budget:
             click.echo("Mode: Preferring budget-friendly products")
+        if allergies or dietary:
+            filters = allergies + dietary
+            click.echo(f"Dietary filters: {', '.join(filters)}")
 
         # Convert consolidated ingredients to ScaledIngredient-like objects for matching
         click.echo("Matching ingredients to products...")
@@ -490,7 +550,14 @@ def plan_meals(
             )
             scaled_ings.append(scaled)
 
-        matches = match_ingredients(api, scaled_ings, prefer_organic=organic, prefer_budget=budget)
+        matches = match_ingredients(
+            api,
+            scaled_ings,
+            prefer_organic=organic,
+            prefer_budget=budget,
+            allergies=allergies if allergies else None,
+            dietary=dietary if dietary else None,
+        )
 
         # Interactive mode: use TUI for review
         if interactive:
@@ -546,6 +613,9 @@ def plan_meals(
 @click.option("--scale", "-s", type=float, help="Scale recipe by multiplier")
 @click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
 @click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
+@click.option("--lactose-free", is_flag=True, help="Filter for lactose-free products")
+@click.option("--gluten-free", is_flag=True, help="Filter for gluten-free products")
+@click.option("--vegan", is_flag=True, help="Filter for vegan products")
 @click.option("--alternatives", "-a", is_flag=True, help="Include alternative products")
 def export_list(
     url: str,
@@ -554,6 +624,9 @@ def export_list(
     scale: float | None,
     organic: bool,
     budget: bool,
+    lactose_free: bool,
+    gluten_free: bool,
+    vegan: bool,
     alternatives: bool,
 ):
     """Export a recipe's shopping list to a file.
@@ -567,8 +640,20 @@ def export_list(
         nemlig export https://recipe.com list.json --alternatives
 
         nemlig export https://recipe.com list.pdf --organic --scale 2
+
+        nemlig export https://recipe.com list.md --lactose-free
     """
     api = get_api()
+
+    # Build dietary filter lists
+    allergies: list[str] = []
+    dietary: list[str] = []
+    if lactose_free:
+        allergies.append("lactose")
+    if gluten_free:
+        allergies.append("gluten")
+    if vegan:
+        dietary.append("vegan")
 
     try:
         # Parse recipe
@@ -586,10 +671,20 @@ def export_list(
             click.echo("Mode: Preferring organic products")
         if budget:
             click.echo("Mode: Preferring budget-friendly products")
+        if allergies or dietary:
+            filters = allergies + dietary
+            click.echo(f"Dietary filters: {', '.join(filters)}")
 
         # Match ingredients
         click.echo("Matching ingredients to products...")
-        matches = match_ingredients(api, scaled_ings, prefer_organic=organic, prefer_budget=budget)
+        matches = match_ingredients(
+            api,
+            scaled_ings,
+            prefer_organic=organic,
+            prefer_budget=budget,
+            allergies=allergies if allergies else None,
+            dietary=dietary if dietary else None,
+        )
 
         # Export
         used_format = export_shopping_list(
@@ -721,6 +816,9 @@ def favorites_delete(name: str, yes: bool):
 @click.option("--servings", "-S", type=int, help="Scale to target servings")
 @click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
 @click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
+@click.option("--lactose-free", is_flag=True, help="Filter for lactose-free products")
+@click.option("--gluten-free", is_flag=True, help="Filter for gluten-free products")
+@click.option("--vegan", is_flag=True, help="Filter for vegan products")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 @click.option("--rematch", is_flag=True, help="Re-match products instead of using saved matches")
 def favorites_order(
@@ -729,6 +827,9 @@ def favorites_order(
     servings: int | None,
     organic: bool,
     budget: bool,
+    lactose_free: bool,
+    gluten_free: bool,
+    vegan: bool,
     yes: bool,
     rematch: bool,
 ):
@@ -737,6 +838,16 @@ def favorites_order(
 
     if not ensure_logged_in(api):
         raise SystemExit(1)
+
+    # Build dietary filter lists
+    allergies: list[str] = []
+    dietary: list[str] = []
+    if lactose_free:
+        allergies.append("lactose")
+    if gluten_free:
+        allergies.append("gluten")
+    if vegan:
+        dietary.append("vegan")
 
     try:
         recipe = get_favorite_recipe(name)
@@ -758,10 +869,13 @@ def favorites_order(
             click.echo("Mode: Preferring organic products")
         if budget:
             click.echo("Mode: Preferring budget-friendly products")
+        if allergies or dietary:
+            filters = allergies + dietary
+            click.echo(f"Dietary filters: {', '.join(filters)}")
 
         # Use saved matches or re-match
-        # Force rematch if organic/budget preferences are set
-        force_rematch = rematch or organic or budget
+        # Force rematch if organic/budget/dietary preferences are set
+        force_rematch = rematch or organic or budget or allergies or dietary
         if not force_rematch and favorite.get("product_matches") and factor == 1.0:
             # Use saved product IDs (quick re-order)
             click.echo("Using saved product matches...")
@@ -770,7 +884,12 @@ def favorites_order(
             # Re-match products (needed for scaling, preferences, or if no saved matches)
             click.echo("Matching ingredients to products...")
             matches = match_ingredients(
-                api, scaled_ings, prefer_organic=organic, prefer_budget=budget
+                api,
+                scaled_ings,
+                prefer_organic=organic,
+                prefer_budget=budget,
+                allergies=allergies if allergies else None,
+                dietary=dietary if dietary else None,
             )
             display_matches(matches)
 
@@ -812,9 +931,29 @@ def favorites_order(
 @click.argument("name")
 @click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
 @click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
-def favorites_update(name: str, organic: bool, budget: bool):
+@click.option("--lactose-free", is_flag=True, help="Filter for lactose-free products")
+@click.option("--gluten-free", is_flag=True, help="Filter for gluten-free products")
+@click.option("--vegan", is_flag=True, help="Filter for vegan products")
+def favorites_update(
+    name: str,
+    organic: bool,
+    budget: bool,
+    lactose_free: bool,
+    gluten_free: bool,
+    vegan: bool,
+):
     """Re-match products for a saved favorite."""
     api = get_api()
+
+    # Build dietary filter lists
+    allergies: list[str] = []
+    dietary: list[str] = []
+    if lactose_free:
+        allergies.append("lactose")
+    if gluten_free:
+        allergies.append("gluten")
+    if vegan:
+        dietary.append("vegan")
 
     try:
         recipe = get_favorite_recipe(name)
@@ -826,12 +965,22 @@ def favorites_update(name: str, organic: bool, budget: bool):
             click.echo("Mode: Preferring organic products")
         if budget:
             click.echo("Mode: Preferring budget-friendly products")
+        if allergies or dietary:
+            filters = allergies + dietary
+            click.echo(f"Dietary filters: {', '.join(filters)}")
 
         # Scale with factor 1.0 (no scaling)
         scaled_ings, _, _ = scale_recipe(recipe)
 
         # Match products
-        matches = match_ingredients(api, scaled_ings, prefer_organic=organic, prefer_budget=budget)
+        matches = match_ingredients(
+            api,
+            scaled_ings,
+            prefer_organic=organic,
+            prefer_budget=budget,
+            allergies=allergies if allergies else None,
+            dietary=dietary if dietary else None,
+        )
         display_matches(matches)
 
         # Save matches
