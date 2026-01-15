@@ -1303,14 +1303,22 @@ def show_slots(days: int, available_only: bool):
                 click.echo(f"\n📅 {date}")
                 click.echo("-" * 40)
 
-            start = slot["start_hour"]
-            end = slot["end_hour"]
-            price = slot["delivery_price"]
-            slot_id = slot["id"]
-            available = "✓" if slot["is_available"] else "✗"
-            free = " (FREE)" if slot["is_free"] else ""
+            start = slot.get("start_hour")
+            end = slot.get("end_hour")
+            price = slot.get("delivery_price")
+            slot_id = slot.get("id")
 
-            price_str = f"{price:.2f} DKK{free}" if price else "Free"
+            # Skip slots with missing critical data
+            if start is None or end is None or slot_id is None:
+                click.echo(
+                    "  ⚠ Skipping malformed slot (missing start_hour, end_hour, or id)", err=True
+                )
+                continue
+
+            available = "✓" if slot.get("is_available") else "✗"
+            free = " (FREE)" if slot.get("is_free") else ""
+
+            price_str = f"{price:.2f} DKK{free}" if price is not None else "Free"
             click.echo(
                 f"  {available} {start:02d}:00-{end:02d}:00  |  {price_str}  |  ID: {slot_id}"
             )
