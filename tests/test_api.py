@@ -850,7 +850,7 @@ class TestDeliverySlots:
 
         # Internal state should be updated
         assert api_client._timeslot == "2026011609-60-600"
-        assert api_client._timeslot_id == "12345"
+        assert api_client._timeslot_id == 12345
 
     def test_select_delivery_slot_not_reserved(
         self, mock_responses, api_client, mock_login_success_response, setup_session_mocks

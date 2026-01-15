@@ -1361,7 +1361,13 @@ def find_cheapest_slot(days: int = 8) -> dict[str, Any]:
             }
 
         # Sort by price (free slots first, then by price)
-        available.sort(key=lambda s: (not s.get("is_free", False), s.get("delivery_price", 999)))
+        # Handle None values explicitly - treat them as expensive
+        available.sort(
+            key=lambda s: (
+                not s.get("is_free", False),
+                s.get("delivery_price") if s.get("delivery_price") is not None else 999,
+            )
+        )
         cheapest = available[0]
 
         return {
@@ -1404,7 +1410,14 @@ def find_earliest_slot() -> dict[str, Any]:
 
         # Slots should already be sorted chronologically from the API
         earliest = available[0]
-        time_range = f"{earliest['start_hour']:02d}:00-{earliest['end_hour']:02d}:00"
+
+        # Format time range only if hours are present
+        start_hour = earliest.get("start_hour")
+        end_hour = earliest.get("end_hour")
+        if start_hour is not None and end_hour is not None:
+            time_range = f"{start_hour:02d}:00-{end_hour:02d}:00"
+        else:
+            time_range = None
 
         return {
             "slot": earliest,

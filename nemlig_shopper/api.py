@@ -1,6 +1,8 @@
 """Nemlig.com API client for authentication, search, and cart operations."""
 
+import re
 import uuid
+from datetime import datetime
 from typing import Any
 
 import requests
@@ -39,7 +41,9 @@ class NemligAPI:
         self._user_id: str | None = None
         self._combined_timestamp: str | None = None
         self._timeslot: str = "2026011409-60-600"  # Default timeslot
-        self._timeslot_id: str = "2161377"  # Default timeslot ID
+        self._timeslot_id: int = 2161377  # Default timeslot ID
+        self._timeslot_reserved_at: datetime | None = None
+        self._timeslot_expires_in_minutes: int = 0
         self._correlation_id: str | None = None
 
     def _get_token(self) -> str | None:
@@ -77,7 +81,7 @@ class NemligAPI:
         except requests.RequestException:
             return {}
 
-    def _get_timeslot(self) -> tuple[str, str]:
+    def _get_timeslot(self) -> tuple[str, int]:
         """Get current delivery timeslot and ID from Order/DeliverySpot."""
         url = f"{API_BASE_URL}/Order/DeliverySpot"
         try:
@@ -86,7 +90,7 @@ class NemligAPI:
             data = response.json()
             if isinstance(data, dict):
                 timeslot_utc = data.get("TimeslotUtc", self._timeslot)
-                timeslot_id = str(data.get("TimeslotId", self._timeslot_id))
+                timeslot_id = int(data.get("TimeslotId", self._timeslot_id))
                 return timeslot_utc, timeslot_id
         except requests.RequestException:
             pass
@@ -583,9 +587,16 @@ class NemligAPI:
 
         Raises:
             NemligAPIError: If not logged in or request fails
+            ValueError: If start_date format is invalid
         """
         if not self._logged_in:
             raise NemligAPIError("Must be logged in to view delivery slots")
+
+        # Validate start_date format if provided
+        if start_date is not None and not re.match(r"^\d{4}-\d{2}-\d{2}$", start_date):
+            raise ValueError(
+                f"Invalid start_date format: {start_date}. Expected YYYY-MM-DD format."
+            )
 
         url = f"{API_BASE_URL}/v2/Delivery/GetDeliveryDays"
         params = {
@@ -638,16 +649,26 @@ class NemligAPI:
 
         Raises:
             NemligAPIError: If not logged in or selection fails
+            ValueError: If timeslot_id is negative or zero
         """
         if not self._logged_in:
             raise NemligAPIError("Must be logged in to select delivery slot")
+
+        if timeslot_id <= 0:
+            raise ValueError(f"Invalid timeslot_id: {timeslot_id}. Must be a positive integer.")
 
         url = f"{API_BASE_URL}/Delivery/TryUpdateDeliveryTime"
         params = {"timeslotId": timeslot_id}
 
         # Get XSRF token from cookies
-        xsrf_token = self.session.cookies.get("XSRF-TOKEN", "")
+        xsrf_token = self.session.cookies.get("XSRF-TOKEN")
         headers = self._get_correlation_headers()
+
+        # Check if XSRF token exists but is empty (invalid state)
+        if xsrf_token is not None and not xsrf_token:
+            raise NemligAPIError("XSRF token is empty. Session may be invalid.")
+
+        # Add XSRF token header if present
         if xsrf_token:
             headers["x-xsrf-token"] = xsrf_token
 
@@ -667,9 +688,25 @@ class NemligAPI:
             # Update internal timeslot state if successful
             if result["is_reserved"] and result["timeslot_utc"]:
                 self._timeslot = result["timeslot_utc"]
-                self._timeslot_id = str(timeslot_id)
+                self._timeslot_id = timeslot_id
+                self._timeslot_reserved_at = datetime.now()
+                self._timeslot_expires_in_minutes = result["minutes_reserved"]
 
             return result
 
         except requests.RequestException as e:
             raise NemligAPIError(f"Failed to select delivery slot: {e}") from e
+
+    def is_timeslot_valid(self) -> bool:
+        """
+        Check if the currently reserved timeslot is still valid.
+
+        Returns:
+            True if a timeslot is reserved and has not expired, False otherwise
+        """
+        if self._timeslot_reserved_at is None or self._timeslot_expires_in_minutes == 0:
+            return False
+
+        elapsed = datetime.now() - self._timeslot_reserved_at
+        elapsed_minutes = elapsed.total_seconds() / 60
+        return elapsed_minutes < self._timeslot_expires_in_minutes
