@@ -82,6 +82,7 @@ class TestIngredientMatching:
         # English ingredients should be translated and matched
         match = match_ingredient(api, "milk")
         assert match.matched
+        assert match.product is not None
         # Should find Danish milk product
         assert "mælk" in match.product.get("name", "").lower() or match.search_query == "mælk"
 

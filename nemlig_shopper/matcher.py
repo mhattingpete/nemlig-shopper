@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from .api import NemligAPI, NemligAPIError
+from .preference_engine import (
+    check_allergy_safety,
+    check_dietary_compatibility,
+)
 from .preferences import is_preferred_product
 from .scaler import ScaledIngredient, calculate_product_quantity
 
@@ -129,6 +133,10 @@ class ProductMatch:
     matched: bool
     search_query: str
     alternatives: list[dict[str, Any]]
+    # Dietary filtering info
+    is_dietary_safe: bool = True
+    dietary_warnings: list[str] | None = None
+    excluded_count: int = 0  # Number of products filtered out due to dietary requirements
 
     @property
     def product_id(self) -> int | None:
@@ -447,6 +455,68 @@ def generate_search_queries(ingredient_name: str) -> list[str]:
     return queries
 
 
+def filter_by_dietary_requirements(
+    products: list[dict[str, Any]],
+    allergies: list[str] | None = None,
+    dietary: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    Filter products by dietary requirements.
+
+    Args:
+        products: List of products to filter
+        allergies: List of allergen types to avoid (e.g., ["lactose", "gluten"])
+        dietary: List of dietary restrictions (e.g., ["vegan", "vegetarian"])
+
+    Returns:
+        Tuple of (safe_products, excluded_products)
+    """
+    if not allergies and not dietary:
+        return products, []
+
+    safe = []
+    excluded = []
+
+    for product in products:
+        is_safe = True
+        reasons = []
+
+        # Check allergies
+        if allergies:
+            result = check_allergy_safety(product, allergies)
+            if not result.is_safe:
+                is_safe = False
+                reasons.extend(result.allergens_found)
+
+        # Check dietary restrictions
+        if dietary and is_safe:
+            result = check_dietary_compatibility(product, dietary)
+            if not result.is_compatible:
+                is_safe = False
+                reasons.extend(result.conflicts)
+
+        if is_safe:
+            safe.append(product)
+        else:
+            # Annotate product with exclusion reason for potential display
+            product = product.copy()
+            product["_excluded_reasons"] = reasons
+            excluded.append(product)
+
+    return safe, excluded
+
+
+def _get_dietary_alternative_query(
+    ingredient_name: str,
+    allergies: list[str] | None,
+    dietary: list[str] | None,
+) -> str | None:
+    """Generate an alternative search query for dietary requirements."""
+    from .preference_engine import get_safe_alternative_query
+
+    return get_safe_alternative_query(ingredient_name, allergies, dietary)
+
+
 def match_ingredient(
     api: NemligAPI,
     ingredient_name: str,
@@ -456,6 +526,8 @@ def match_ingredient(
     *,
     prefer_organic: bool = False,
     prefer_budget: bool = False,
+    allergies: list[str] | None = None,
+    dietary: list[str] | None = None,
 ) -> ProductMatch:
     """
     Find matching products for a single ingredient.
@@ -468,6 +540,11 @@ def match_ingredient(
     - Organic products (if prefer_organic=True)
     - Cheaper products (if prefer_budget=True)
 
+    When allergies or dietary restrictions are specified, uses a hybrid approach:
+    1. Phase 1: Filter out unsafe products
+    2. Phase 2: If all filtered, try alternative search (e.g., "laktosefri mælk")
+    3. Phase 3: If still nothing, show warning with best available match
+
     Args:
         api: NemligAPI instance
         ingredient_name: Name of ingredient to match
@@ -476,6 +553,8 @@ def match_ingredient(
         max_alternatives: Maximum alternative products to return
         prefer_organic: Boost organic products in scoring
         prefer_budget: Boost cheaper products in scoring
+        allergies: List of allergen types to avoid (e.g., ["lactose", "gluten"])
+        dietary: List of dietary restrictions (e.g., ["vegan", "vegetarian"])
 
     Returns:
         ProductMatch with best match and alternatives
@@ -526,6 +605,61 @@ def match_ingredient(
             product.pop("_search_query", None)
             sorted_products.append(product)
 
+        # === PHASE 1: Filter by dietary requirements ===
+        excluded_count = 0
+        dietary_warnings: list[str] | None = None
+        is_dietary_safe = True
+
+        if allergies or dietary:
+            safe_products, excluded = filter_by_dietary_requirements(
+                sorted_products, allergies, dietary
+            )
+            excluded_count = len(excluded)
+
+            if safe_products:
+                # Use only safe products
+                sorted_products = safe_products
+            else:
+                # === PHASE 2: Try alternative search with dietary modifiers ===
+                alt_query = _get_dietary_alternative_query(ingredient_name, allergies, dietary)
+                if alt_query:
+                    try:
+                        alt_products = api.search_products(alt_query, limit=max_alternatives + 2)
+                        if alt_products:
+                            # Filter the alternative results too
+                            safe_alt, _ = filter_by_dietary_requirements(
+                                alt_products, allergies, dietary
+                            )
+                            if safe_alt:
+                                sorted_products = safe_alt
+                                used_query = alt_query
+                            else:
+                                # === PHASE 3: No safe products found, warn user ===
+                                is_dietary_safe = False
+                                dietary_warnings = [
+                                    f"No {'/'.join((allergies or []) + (dietary or []))}-safe "
+                                    f"products found for '{ingredient_name}'"
+                                ]
+                        else:
+                            is_dietary_safe = False
+                            dietary_warnings = [
+                                f"No {'/'.join((allergies or []) + (dietary or []))}-safe "
+                                f"products found for '{ingredient_name}'"
+                            ]
+                    except NemligAPIError:
+                        is_dietary_safe = False
+                        dietary_warnings = [
+                            f"No {'/'.join((allergies or []) + (dietary or []))}-safe "
+                            f"products found for '{ingredient_name}'"
+                        ]
+                else:
+                    # No alternative query available
+                    is_dietary_safe = False
+                    dietary_warnings = [
+                        f"No {'/'.join((allergies or []) + (dietary or []))}-safe "
+                        f"products found for '{ingredient_name}'"
+                    ]
+
         # Best match is highest scored result
         best_match = sorted_products[0]
         alternatives = sorted_products[1 : max_alternatives + 1]
@@ -541,6 +675,9 @@ def match_ingredient(
             matched=True,
             search_query=used_query,
             alternatives=alternatives,
+            is_dietary_safe=is_dietary_safe,
+            dietary_warnings=dietary_warnings,
+            excluded_count=excluded_count,
         )
 
     # No products found - use fallback quantity calculation
@@ -562,6 +699,8 @@ def match_ingredients(
     *,
     prefer_organic: bool = False,
     prefer_budget: bool = False,
+    allergies: list[str] | None = None,
+    dietary: list[str] | None = None,
 ) -> list[ProductMatch]:
     """
     Match all ingredients to products.
@@ -572,6 +711,8 @@ def match_ingredients(
         max_alternatives: Maximum alternatives per ingredient
         prefer_organic: Boost organic products in scoring
         prefer_budget: Boost cheaper products in scoring
+        allergies: List of allergen types to avoid (e.g., ["lactose", "gluten"])
+        dietary: List of dietary restrictions (e.g., ["vegan", "vegetarian"])
 
     Returns:
         List of ProductMatch objects
@@ -587,6 +728,8 @@ def match_ingredients(
             max_alternatives,
             prefer_organic=prefer_organic,
             prefer_budget=prefer_budget,
+            allergies=allergies,
+            dietary=dietary,
         )
         matches.append(match)
 
