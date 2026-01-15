@@ -21,6 +21,11 @@ from .matcher import (
     match_ingredients,
     prepare_cart_items,
 )
+from .planner import (
+    MealPlan,
+    create_meal_plan,
+    load_urls_from_file,
+)
 from .preferences import (
     PreferencesError,
     clear_preferences,
@@ -357,6 +362,147 @@ def add_to_cart(
             match_dicts = [m.to_dict() for m in matches]
             save_favorite(save_as, recipe, match_dicts, overwrite=True)
             click.echo(f"✓ Saved as favorite: {save_as}")
+
+    except ImportError as e:
+        click.echo(f"✗ {e}", err=True)
+        raise SystemExit(1) from None
+    except Exception as e:
+        click.echo(f"✗ Error: {e}", err=True)
+        raise SystemExit(1) from None
+
+
+# ============================================================================
+# Meal Planning Commands
+# ============================================================================
+
+
+def display_meal_plan(plan: MealPlan) -> None:
+    """Display a meal plan with consolidated ingredients."""
+    click.echo()
+    click.echo("=" * 60)
+    click.echo(f"MEAL PLAN ({plan.recipe_count} recipes)")
+    click.echo("=" * 60)
+
+    click.echo("\nRecipes:")
+    for i, recipe in enumerate(plan.recipes, 1):
+        servings_str = f" ({recipe.servings} servings)" if recipe.servings else ""
+        click.echo(f"  {i}. {recipe.title}{servings_str}")
+
+    click.echo(f"\nConsolidated Ingredients ({plan.ingredient_count} items):")
+    for ing in plan.consolidated_ingredients:
+        sources_str = f" [{', '.join(ing.sources)}]" if len(ing.sources) > 1 else ""
+        click.echo(f"  • {ing}{sources_str}")
+
+    click.echo()
+
+
+@cli.command("plan")
+@click.argument("urls", nargs=-1)
+@click.option("--file", "-f", "file_path", type=click.Path(exists=True), help="Load URLs from file")
+@click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
+@click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+def plan_meals(
+    urls: tuple[str, ...],
+    file_path: str | None,
+    organic: bool,
+    budget: bool,
+    yes: bool,
+):
+    """Plan meals from multiple recipe URLs.
+
+    Parses all recipes, consolidates duplicate ingredients, and adds
+    everything to your cart.
+
+    Examples:
+
+        nemlig plan https://recipe1.com https://recipe2.com
+
+        nemlig plan --file recipes.txt --organic
+
+        nemlig plan url1 url2 --budget --yes
+    """
+    api = get_api()
+
+    if not ensure_logged_in(api):
+        raise SystemExit(1)
+
+    # Collect URLs from arguments and file
+    all_urls = list(urls)
+    if file_path:
+        try:
+            file_urls = load_urls_from_file(file_path)
+            all_urls.extend(file_urls)
+        except FileNotFoundError:
+            click.echo(f"✗ File not found: {file_path}", err=True)
+            raise SystemExit(1) from None
+
+    if not all_urls:
+        click.echo("✗ No recipe URLs provided. Use arguments or --file.", err=True)
+        raise SystemExit(1)
+
+    try:
+        # Create meal plan
+        click.echo(f"Parsing {len(all_urls)} recipes...")
+        plan = create_meal_plan(all_urls)
+
+        display_meal_plan(plan)
+
+        # Show preference mode
+        if organic:
+            click.echo("Mode: Preferring organic products")
+        if budget:
+            click.echo("Mode: Preferring budget-friendly products")
+
+        # Convert consolidated ingredients to ScaledIngredient-like objects for matching
+        click.echo("Matching ingredients to products...")
+        from .recipe_parser import Ingredient
+        from .scaler import ScaledIngredient
+
+        # Create ScaledIngredient objects from consolidated ingredients
+        scaled_ings = []
+        for cons in plan.consolidated_ingredients:
+            # Create a minimal Ingredient for the ScaledIngredient wrapper
+            orig = Ingredient(
+                original=str(cons),
+                name=cons.name,
+                quantity=cons.total_quantity,
+                unit=cons.unit,
+            )
+            scaled = ScaledIngredient(
+                original=orig,
+                scaled_quantity=cons.total_quantity,
+                scale_factor=1.0,
+            )
+            scaled_ings.append(scaled)
+
+        matches = match_ingredients(api, scaled_ings, prefer_organic=organic, prefer_budget=budget)
+
+        display_matches(matches, show_alternatives=True)
+
+        # Check for unmatched
+        unmatched = get_unmatched_ingredients(matches)
+        if unmatched:
+            click.echo(f"\n⚠ {len(unmatched)} ingredients could not be matched:")
+            for name in unmatched:
+                click.echo(f"  - {name}")
+
+        # Confirm
+        if not yes:
+            if not click.confirm("\nAdd matched products to cart?"):
+                click.echo("Cancelled.")
+                return
+
+        # Add to cart
+        cart_items = prepare_cart_items(matches)
+        result = api.add_multiple_to_cart(cart_items)
+
+        success_count = len(result["success"])
+        fail_count = len(result["failed"])
+
+        click.echo(f"\n✓ Added {success_count} products to cart")
+        if fail_count:
+            click.echo(f"✗ Failed to add {fail_count} products")
 
     except ImportError as e:
         click.echo(f"✗ {e}", err=True)
