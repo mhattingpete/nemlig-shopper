@@ -1,6 +1,6 @@
 """LLM-friendly composable tools for grocery shopping orchestration.
 
-This module provides ~25 stateless functions that an LLM can compose
+This module provides stateless functions that an LLM can compose
 to orchestrate the grocery shopping workflow. Each function has clear
 inputs/outputs and can be called independently.
 
@@ -11,17 +11,21 @@ Tool Categories:
 - Preference tools: Check dietary/allergy safety
 - Package tools: Optimize package selection
 - Cart tools: Add products to cart
+- Export tools: Export shopping lists to various formats
+- Price tracking tools: Track prices over time and find deals
 
 Example LLM workflow:
     1. result = consolidate_shopping_list(urls, items)
     2. matches = match_shopping_list(result["consolidated"], allergies=["nuts"])
     3. if matches["warnings"]: review and adjust
     4. cart_result = add_matches_to_cart(matches["matches"])
+    5. export_matches(matches["matches"], "shopping-list.md")
 """
 
 from typing import Any
 
 from .api import NemligAPI, NemligAPIError
+from .export import export_shopping_list as _export_shopping_list
 from .matcher import (
     ProductMatch,
     match_ingredient,
@@ -39,6 +43,7 @@ from .preference_engine import (
     filter_products_by_dietary,
     get_safe_alternative_query,
 )
+from .price_tracker import get_tracker
 from .recipe_parser import (
     Ingredient,
     Recipe,
@@ -917,6 +922,323 @@ def get_shopping_summary(matches: list[dict[str, Any]]) -> str:
 
 
 # =============================================================================
+# EXPORT TOOLS
+# =============================================================================
+
+
+def export_matches(
+    matches: list[dict[str, Any]],
+    filepath: str,
+    *,
+    recipe_title: str | None = None,
+    format: str | None = None,
+    include_alternatives: bool = False,
+) -> dict[str, Any]:
+    """
+    Export shopping list matches to a file.
+
+    Supports JSON, Markdown, and PDF formats. Format is auto-detected
+    from file extension if not specified.
+
+    Args:
+        matches: List of match dicts from match_shopping_list()
+        filepath: Output file path (e.g., "shopping-list.md", "list.pdf")
+        recipe_title: Optional title for the export
+        format: Output format ("json", "md", "pdf") - auto-detected if None
+        include_alternatives: Include alternative products (JSON/MD only)
+
+    Returns:
+        {
+            "filepath": str,
+            "format": str,
+            "item_count": int,
+            "success": bool
+        }
+    """
+    # Convert dicts back to ProductMatch objects
+    match_objects = [_dict_to_match(m) for m in matches]
+
+    try:
+        used_format = _export_shopping_list(
+            match_objects,
+            filepath,
+            recipe_title=recipe_title,
+            format=format,
+            include_alternatives=include_alternatives,
+        )
+        return {
+            "filepath": filepath,
+            "format": used_format,
+            "item_count": len(matches),
+            "success": True,
+        }
+    except Exception as e:
+        return {
+            "filepath": filepath,
+            "format": format,
+            "item_count": len(matches),
+            "success": False,
+            "error": str(e),
+        }
+
+
+def export_to_json_string(
+    matches: list[dict[str, Any]],
+    recipe_title: str | None = None,
+) -> str:
+    """
+    Export shopping list to a JSON string (without writing to file).
+
+    Args:
+        matches: List of match dicts from match_shopping_list()
+        recipe_title: Optional title for the export
+
+    Returns:
+        JSON string of the shopping list
+    """
+    import json
+    from datetime import datetime
+
+    items: list[dict[str, Any]] = []
+    summary: dict[str, Any] = {
+        "total_items": len(matches),
+        "matched": sum(1 for m in matches if m.get("matched")),
+        "unmatched": sum(1 for m in matches if not m.get("matched")),
+    }
+
+    for match in matches:
+        item: dict[str, Any] = {
+            "ingredient": match.get("ingredient"),
+            "matched": match.get("matched", False),
+            "quantity": match.get("quantity", 1),
+        }
+
+        if match.get("matched") and match.get("product"):
+            product = match["product"]
+            item["product"] = {
+                "id": product.get("id"),
+                "name": product.get("name"),
+                "price": product.get("price"),
+                "unit_size": product.get("unit_size"),
+            }
+
+        items.append(item)
+
+    # Calculate total
+    total = sum(
+        (m["product"]["price"] or 0) * m["quantity"]
+        for m in matches
+        if m.get("matched") and m.get("product")
+    )
+    summary["estimated_total"] = round(total, 2)
+
+    data: dict[str, Any] = {
+        "exported_at": datetime.now().isoformat(),
+        "recipe_title": recipe_title,
+        "items": items,
+        "summary": summary,
+    }
+
+    return json.dumps(data, indent=2, ensure_ascii=False)
+
+
+# =============================================================================
+# PRICE TRACKING TOOLS
+# =============================================================================
+
+
+def record_product_prices(products: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Record prices for products (call after searches to build history).
+
+    This should be called after product searches to build up a price
+    history database that enables price alerts and deal detection.
+
+    Args:
+        products: List of product dicts from search results
+
+    Returns:
+        {
+            "recorded_count": int,
+            "total_tracked": int,
+            "total_price_records": int
+        }
+    """
+    tracker = get_tracker()
+    count = tracker.record_prices(products)
+
+    return {
+        "recorded_count": count,
+        "total_tracked": tracker.get_tracked_count(),
+        "total_price_records": tracker.get_price_count(),
+    }
+
+
+def get_price_history(
+    product_id: int | None = None,
+    product_name: str | None = None,
+    days: int = 30,
+) -> dict[str, Any]:
+    """
+    Get price history for a product.
+
+    Args:
+        product_id: Product ID (preferred, exact match)
+        product_name: Product name (fuzzy search if no ID)
+        days: Number of days to look back (default 30)
+
+    Returns:
+        {
+            "product_name": str | None,
+            "history": [
+                {"price": float, "unit_price": float | None, "recorded_at": str}
+            ],
+            "record_count": int
+        }
+    """
+    tracker = get_tracker()
+    records = tracker.get_price_history(
+        product_id=product_id,
+        product_name=product_name,
+        days=days,
+    )
+
+    if not records:
+        return {
+            "product_name": product_name,
+            "history": [],
+            "record_count": 0,
+        }
+
+    return {
+        "product_name": records[0].product_name,
+        "history": [
+            {
+                "price": r.price,
+                "unit_price": r.unit_price,
+                "recorded_at": r.recorded_at.isoformat(),
+            }
+            for r in records
+        ],
+        "record_count": len(records),
+    }
+
+
+def get_price_statistics(product_id: int) -> dict[str, Any] | None:
+    """
+    Get price statistics for a tracked product.
+
+    Args:
+        product_id: Product ID
+
+    Returns:
+        {
+            "product_id": int,
+            "product_name": str,
+            "current_price": float,
+            "min_price": float,
+            "max_price": float,
+            "avg_price": float,
+            "price_count": int,
+            "is_on_sale": bool,
+            "discount_percent": float
+        }
+        or None if product not tracked
+    """
+    tracker = get_tracker()
+    stats = tracker.get_price_stats(product_id)
+
+    if not stats:
+        return None
+
+    return {
+        "product_id": stats.product_id,
+        "product_name": stats.product_name,
+        "current_price": stats.current_price,
+        "min_price": stats.min_price,
+        "max_price": stats.max_price,
+        "avg_price": round(stats.avg_price, 2),
+        "price_count": stats.price_count,
+        "is_on_sale": stats.is_on_sale,
+        "discount_percent": round(stats.discount_percent, 1),
+    }
+
+
+def get_price_alerts(min_discount: float = 5.0) -> dict[str, Any]:
+    """
+    Get products that are currently on sale below their average price.
+
+    Args:
+        min_discount: Minimum discount percentage to include (default 5%)
+
+    Returns:
+        {
+            "alerts": [
+                {
+                    "product_id": int,
+                    "product_name": str,
+                    "current_price": float,
+                    "avg_price": float,
+                    "discount_percent": float,
+                    "is_lowest_ever": bool
+                }
+            ],
+            "alert_count": int
+        }
+    """
+    tracker = get_tracker()
+    alerts = tracker.get_price_alerts(min_discount=min_discount)
+
+    return {
+        "alerts": [
+            {
+                "product_id": a.product_id,
+                "product_name": a.product_name,
+                "current_price": a.current_price,
+                "avg_price": round(a.avg_price, 2),
+                "min_price": a.min_price,
+                "discount_percent": round(a.discount_percent, 1),
+                "is_lowest_ever": a.is_lowest,
+            }
+            for a in alerts
+        ],
+        "alert_count": len(alerts),
+    }
+
+
+def search_tracked_products(query: str, limit: int = 20) -> list[dict[str, Any]]:
+    """
+    Search products in the price tracking database.
+
+    Args:
+        query: Search query
+        limit: Maximum results (default 20)
+
+    Returns:
+        List of tracked product dicts with id, name, category
+    """
+    tracker = get_tracker()
+    return tracker.search_products(query, limit=limit)
+
+
+def get_tracking_stats() -> dict[str, Any]:
+    """
+    Get overall price tracking statistics.
+
+    Returns:
+        {
+            "tracked_products": int,
+            "total_price_records": int
+        }
+    """
+    tracker = get_tracker()
+    return {
+        "tracked_products": tracker.get_tracked_count(),
+        "total_price_records": tracker.get_price_count(),
+    }
+
+
+# =============================================================================
 # UTILITY FUNCTIONS (Internal)
 # =============================================================================
 
@@ -1012,4 +1334,18 @@ def _dict_to_recipe(data: dict[str, Any]) -> Recipe:
         ingredients=ingredients,
         servings=data.get("servings"),
         source_url=data.get("source_url"),
+    )
+
+
+def _dict_to_match(data: dict[str, Any]) -> ProductMatch:
+    """Convert dict back to ProductMatch."""
+    return ProductMatch(
+        ingredient_name=data.get("ingredient", ""),
+        product=data.get("product"),
+        quantity=data.get("quantity", 1),
+        matched=data.get("matched", False),
+        search_query=data.get("search_query", ""),
+        alternatives=data.get("alternatives", []),
+        is_dietary_safe=data.get("safety", {}).get("is_safe", True),
+        dietary_warnings=data.get("safety", {}).get("warnings"),
     )
