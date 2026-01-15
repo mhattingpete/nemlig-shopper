@@ -1239,6 +1239,188 @@ def get_tracking_stats() -> dict[str, Any]:
 
 
 # =============================================================================
+# DELIVERY SLOT TOOLS
+# =============================================================================
+
+
+def get_delivery_slots(
+    days: int = 8,
+    available_only: bool = False,
+) -> dict[str, Any]:
+    """
+    Get available delivery time slots from Nemlig.
+
+    Args:
+        days: Number of days to fetch slots for (default 8)
+        available_only: If True, only return available slots
+
+    Returns:
+        {
+            "slots": [
+                {
+                    "id": int,
+                    "date": str,
+                    "start_hour": int,
+                    "end_hour": int,
+                    "delivery_price": float,
+                    "is_available": bool,
+                    "is_free": bool
+                }
+            ],
+            "slot_count": int,
+            "available_count": int
+        }
+    """
+    api = _get_api()
+    try:
+        slots = api.get_delivery_slots(days=days)
+
+        if available_only:
+            slots = [s for s in slots if s.get("is_available")]
+
+        available_count = sum(1 for s in slots if s.get("is_available"))
+
+        return {
+            "slots": slots,
+            "slot_count": len(slots),
+            "available_count": available_count,
+        }
+    except NemligAPIError as e:
+        return {
+            "slots": [],
+            "slot_count": 0,
+            "available_count": 0,
+            "error": str(e),
+        }
+
+
+def select_delivery_slot(slot_id: int) -> dict[str, Any]:
+    """
+    Select and reserve a delivery time slot.
+
+    The slot is typically reserved for 20 minutes. After selecting a slot,
+    you should proceed to checkout before the reservation expires.
+
+    Args:
+        slot_id: The ID of the slot to select (from get_delivery_slots)
+
+    Returns:
+        {
+            "success": bool,
+            "is_reserved": bool,
+            "minutes_reserved": int,
+            "timeslot_utc": str | None,
+            "error": str | None
+        }
+    """
+    api = _get_api()
+    try:
+        result = api.select_delivery_slot(slot_id)
+        return {
+            "success": result.get("is_reserved", False),
+            "is_reserved": result.get("is_reserved", False),
+            "minutes_reserved": result.get("minutes_reserved", 0),
+            "timeslot_utc": result.get("timeslot_utc"),
+            "delivery_zone_id": result.get("delivery_zone_id"),
+        }
+    except NemligAPIError as e:
+        return {
+            "success": False,
+            "is_reserved": False,
+            "minutes_reserved": 0,
+            "timeslot_utc": None,
+            "error": str(e),
+        }
+
+
+def find_cheapest_slot(days: int = 8) -> dict[str, Any]:
+    """
+    Find the cheapest available delivery slot.
+
+    Args:
+        days: Number of days to search (default 8)
+
+    Returns:
+        {
+            "slot": {...} | None,
+            "delivery_price": float | None,
+            "is_free": bool
+        }
+    """
+    api = _get_api()
+    try:
+        slots = api.get_delivery_slots(days=days)
+        available = [s for s in slots if s.get("is_available")]
+
+        if not available:
+            return {
+                "slot": None,
+                "delivery_price": None,
+                "is_free": False,
+                "message": "No available slots found",
+            }
+
+        # Sort by price (free slots first, then by price)
+        available.sort(key=lambda s: (not s.get("is_free", False), s.get("delivery_price", 999)))
+        cheapest = available[0]
+
+        return {
+            "slot": cheapest,
+            "delivery_price": cheapest.get("delivery_price"),
+            "is_free": cheapest.get("is_free", False),
+        }
+    except NemligAPIError as e:
+        return {
+            "slot": None,
+            "delivery_price": None,
+            "is_free": False,
+            "error": str(e),
+        }
+
+
+def find_earliest_slot() -> dict[str, Any]:
+    """
+    Find the earliest available delivery slot.
+
+    Returns:
+        {
+            "slot": {...} | None,
+            "date": str | None,
+            "time_range": str | None
+        }
+    """
+    api = _get_api()
+    try:
+        slots = api.get_delivery_slots(days=8)
+        available = [s for s in slots if s.get("is_available")]
+
+        if not available:
+            return {
+                "slot": None,
+                "date": None,
+                "time_range": None,
+                "message": "No available slots found",
+            }
+
+        # Slots should already be sorted chronologically from the API
+        earliest = available[0]
+        time_range = f"{earliest['start_hour']:02d}:00-{earliest['end_hour']:02d}:00"
+
+        return {
+            "slot": earliest,
+            "date": earliest.get("date"),
+            "time_range": time_range,
+        }
+    except NemligAPIError as e:
+        return {
+            "slot": None,
+            "date": None,
+            "time_range": None,
+            "error": str(e),
+        }
+
+
+# =============================================================================
 # UTILITY FUNCTIONS (Internal)
 # =============================================================================
 

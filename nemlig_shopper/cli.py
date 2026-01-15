@@ -1253,6 +1253,111 @@ def prices_clear(yes: bool, old_only: bool):
 
 
 # ============================================================================
+# Delivery Slot Commands
+# ============================================================================
+
+
+@cli.command("slots")
+@click.option("--days", "-d", default=8, help="Number of days to show slots for")
+@click.option("--available-only", "-a", is_flag=True, help="Only show available slots")
+def show_slots(days: int, available_only: bool):
+    """Show available delivery time slots.
+
+    Lists upcoming delivery windows with prices and availability.
+
+    Examples:
+
+        nemlig slots
+
+        nemlig slots --days 14 --available-only
+    """
+    api = get_api()
+
+    if not ensure_logged_in(api):
+        raise SystemExit(1)
+
+    try:
+        click.echo(f"Fetching delivery slots for next {days} days...")
+        slots = api.get_delivery_slots(days=days)
+
+        if not slots:
+            click.echo("No delivery slots found.")
+            return
+
+        if available_only:
+            slots = [s for s in slots if s["is_available"]]
+
+        if not slots:
+            click.echo("No available slots found.")
+            return
+
+        click.echo()
+        click.echo("AVAILABLE DELIVERY SLOTS")
+        click.echo("=" * 60)
+
+        current_date = None
+        for slot in slots:
+            date = slot["date"]
+            if date != current_date:
+                current_date = date
+                click.echo(f"\n📅 {date}")
+                click.echo("-" * 40)
+
+            start = slot["start_hour"]
+            end = slot["end_hour"]
+            price = slot["delivery_price"]
+            slot_id = slot["id"]
+            available = "✓" if slot["is_available"] else "✗"
+            free = " (FREE)" if slot["is_free"] else ""
+
+            price_str = f"{price:.2f} DKK{free}" if price else "Free"
+            click.echo(
+                f"  {available} {start:02d}:00-{end:02d}:00  |  {price_str}  |  ID: {slot_id}"
+            )
+
+        click.echo()
+        click.echo("Use 'nemlig select-slot <ID>' to reserve a slot.")
+
+    except NemligAPIError as e:
+        click.echo(f"✗ Failed to get slots: {e}", err=True)
+        raise SystemExit(1) from None
+
+
+@cli.command("select-slot")
+@click.argument("slot_id", type=int)
+def select_slot(slot_id: int):
+    """Select a delivery time slot.
+
+    Reserves the specified delivery slot. The slot ID can be found
+    by running 'nemlig slots'.
+
+    Examples:
+
+        nemlig select-slot 2161377
+    """
+    api = get_api()
+
+    if not ensure_logged_in(api):
+        raise SystemExit(1)
+
+    try:
+        click.echo(f"Selecting slot {slot_id}...")
+        result = api.select_delivery_slot(slot_id)
+
+        if result["is_reserved"]:
+            minutes = result["minutes_reserved"]
+            click.echo(f"✓ Slot reserved for {minutes} minutes")
+            click.echo(f"  Timeslot: {result['timeslot_utc']}")
+        else:
+            click.echo("✗ Failed to reserve slot. It may no longer be available.")
+            raise SystemExit(1)
+
+    except NemligAPIError as e:
+        click.echo(f"✗ Failed to select slot: {e}", err=True)
+        raise SystemExit(1) from None
+
+
+# ============================================================================
 # Entry Point
 # ============================================================================
 
