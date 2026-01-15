@@ -146,7 +146,7 @@ class NemligAPI:
             response.raise_for_status()
 
             data = response.json()
-            if data.get("IsLoggedIn") or response.status_code == 200:
+            if data.get("IsLoggedIn"):
                 self._logged_in = True
                 # Refresh session data after login to get user ID and tokens
                 self._refresh_session_data()
@@ -567,3 +567,109 @@ class NemligAPI:
                 continue
 
         return list(products_by_id.values())
+
+    def get_delivery_slots(
+        self, days: int = 8, start_date: str | None = None
+    ) -> list[dict[str, Any]]:
+        """
+        Get available delivery time slots.
+
+        Args:
+            days: Number of days to fetch slots for (default 8)
+            start_date: Start date in YYYY-MM-DD format (default: today)
+
+        Returns:
+            List of delivery slots with id, date, time range, price, and availability
+
+        Raises:
+            NemligAPIError: If not logged in or request fails
+        """
+        if not self._logged_in:
+            raise NemligAPIError("Must be logged in to view delivery slots")
+
+        url = f"{API_BASE_URL}/v2/Delivery/GetDeliveryDays"
+        params = {
+            "startDate": start_date or "undefined",
+            "showForSubscriptions": "false",
+            "days": days,
+        }
+
+        try:
+            response = self.session.get(url, params=params, headers=self._get_correlation_headers())
+            response.raise_for_status()
+            data = response.json()
+
+            slots: list[dict[str, Any]] = []
+            for day_range in data.get("DayRangeHours", []):
+                for slot in day_range.get("DayHours", []):
+                    slots.append(
+                        {
+                            "id": slot.get("Id"),
+                            "date": slot.get("Date"),
+                            "start_hour": slot.get("StartHour"),
+                            "end_hour": slot.get("EndHour"),
+                            "delivery_price": slot.get("DeliveryPrice"),
+                            "deadline": slot.get("Deadline"),
+                            "availability": slot.get("Availability"),
+                            "is_free": slot.get("IsFreeHour", False),
+                            "type": slot.get("Type"),
+                            "is_available": slot.get("Availability") == "Available",
+                        }
+                    )
+
+            return slots
+
+        except requests.RequestException as e:
+            raise NemligAPIError(f"Failed to get delivery slots: {e}") from e
+
+    def select_delivery_slot(self, timeslot_id: int) -> dict[str, Any]:
+        """
+        Select a delivery time slot.
+
+        Args:
+            timeslot_id: The ID of the slot to select (from get_delivery_slots)
+
+        Returns:
+            Dict with reservation details including:
+            - is_reserved: Whether the slot was successfully reserved
+            - minutes_reserved: How long the reservation is valid
+            - timeslot_utc: The reserved timeslot identifier
+            - delivery_zone_id: The delivery zone
+
+        Raises:
+            NemligAPIError: If not logged in or selection fails
+        """
+        if not self._logged_in:
+            raise NemligAPIError("Must be logged in to select delivery slot")
+
+        url = f"{API_BASE_URL}/Delivery/TryUpdateDeliveryTime"
+        params = {"timeslotId": timeslot_id}
+
+        # Get XSRF token from cookies
+        xsrf_token = self.session.cookies.get("XSRF-TOKEN", "")
+        headers = self._get_correlation_headers()
+        if xsrf_token:
+            headers["x-xsrf-token"] = xsrf_token
+
+        try:
+            response = self.session.post(url, params=params, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+
+            result = {
+                "is_reserved": data.get("IsReserved", False),
+                "minutes_reserved": data.get("MinutesReserved", 0),
+                "timeslot_utc": data.get("TimeslotUtc"),
+                "delivery_zone_id": data.get("DeliveryZoneId"),
+                "price_change_diff": data.get("PriceChangeDiff"),
+            }
+
+            # Update internal timeslot state if successful
+            if result["is_reserved"] and result["timeslot_utc"]:
+                self._timeslot = result["timeslot_utc"]
+                self._timeslot_id = str(timeslot_id)
+
+            return result
+
+        except requests.RequestException as e:
+            raise NemligAPIError(f"Failed to select delivery slot: {e}") from e
