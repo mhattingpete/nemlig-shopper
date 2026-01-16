@@ -267,7 +267,12 @@ def filter_pantry_items(
     Returns:
         Filtered list with excluded items removed
     """
-    exclude_normalized = {_normalize_for_matching(name) for name in items_to_exclude}
+    if not items_to_exclude:
+        return ingredients
+
+    exclude_normalized = {
+        _normalize_for_matching(name) for name in items_to_exclude if name is not None
+    }
 
     return [
         ing for ing in ingredients if _normalize_for_matching(ing.name) not in exclude_normalized

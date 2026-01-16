@@ -436,6 +436,11 @@ def add_to_cart(
                 consolidated_for_pantry, pantry_config
             )
 
+            # Build index map: consolidated ingredient -> original scaled_ings index
+            pantry_candidate_indices = {
+                id(c): i for i, c in enumerate(consolidated_for_pantry) if c in pantry_candidates
+            }
+
             if pantry_candidates:
                 click.echo(f"\nFound {len(pantry_candidates)} potential pantry items.")
 
@@ -461,10 +466,15 @@ def add_to_cart(
                         add_to_pantry(pantry_result.excluded_items, PANTRY_FILE)
                         click.echo("✓ Saved excluded items to your pantry")
 
-                    # Filter out excluded items from scaled_ings
-                    excluded_names = {name.lower() for name in pantry_result.excluded_items}
+                    # Filter out excluded items using indices for precision
+                    excluded_names_lower = {name.lower() for name in pantry_result.excluded_items}
+                    excluded_indices = {
+                        pantry_candidate_indices[id(c)]
+                        for c in pantry_candidates
+                        if c.name.lower() in excluded_names_lower
+                    }
                     scaled_ings = [
-                        ing for ing in scaled_ings if ing.name.lower() not in excluded_names
+                        ing for i, ing in enumerate(scaled_ings) if i not in excluded_indices
                     ]
 
         # Show preference mode
