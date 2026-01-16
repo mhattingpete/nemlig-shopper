@@ -150,11 +150,17 @@ class NemligAPI:
             response.raise_for_status()
 
             data = response.json()
-            if data.get("IsLoggedIn"):
+            # Successful login returns RedirectUrl, failed returns ErrorCode
+            if data.get("RedirectUrl") or data.get("MergeSuccessful"):
                 self._logged_in = True
+                # Capture timeslot from login response (required for search)
+                if data.get("TimeslotUtc"):
+                    self._timeslot = data["TimeslotUtc"]
                 # Refresh session data after login to get user ID and tokens
                 self._refresh_session_data()
                 return True
+            elif data.get("ErrorCode"):
+                raise NemligAPIError(f"Login failed: {data.get('ErrorMessage', 'Unknown error')}")
             else:
                 raise NemligAPIError("Login failed: Invalid credentials")
 

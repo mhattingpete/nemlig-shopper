@@ -62,7 +62,13 @@ def mock_timeslot_response():
 @pytest.fixture
 def mock_login_success_response():
     """Standard successful login response."""
-    return {"IsLoggedIn": True, "UserId": 67890}
+    # Nemlig API returns RedirectUrl on successful login (not IsLoggedIn)
+    return {
+        "RedirectUrl": "/",
+        "MergeSuccessful": True,
+        "ZipCodeDiffers": False,
+        "DeliveryZoneId": 1,
+    }
 
 
 @pytest.fixture
