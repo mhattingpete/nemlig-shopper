@@ -98,3 +98,9 @@ This is essential when the API changes or new endpoints need to be discovered, s
 3. `ty check` - Type checking
 
 Since these run automatically, there's no need to manually run linting or type checking.
+
+## Script Execution Rules
+
+- **Never run inline Python scripts** - Always create script files first, then execute them
+- **Debug scripts**: Prefix with `debug_` (e.g., `debug_search.py`) - these are temporary and can be deleted
+- **Production scripts**: Use descriptive names in `/tmp/claude/` for one-off tasks

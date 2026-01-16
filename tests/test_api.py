@@ -52,17 +52,22 @@ class TestAuthentication:
 
     def test_login_invalid_credentials(self, mock_responses, api_client):
         """Login with invalid credentials should raise NemligAPIError."""
+        # Nemlig API returns 400 with ErrorCode for invalid credentials
         mock_responses.add(
             responses.POST,
             f"{API_BASE_URL}/login",
-            json={"IsLoggedIn": False, "ErrorMessage": "Invalid credentials"},
-            status=200,
+            json={
+                "Data": None,
+                "ErrorCode": 4,
+                "ErrorMessage": "E-mail og/eller password er ikke gyldig",
+            },
+            status=400,
         )
 
         with pytest.raises(NemligAPIError) as exc_info:
             api_client.login("wrong@example.com", "wrongpassword")
 
-        assert "Invalid credentials" in str(exc_info.value)
+        assert "400" in str(exc_info.value) or "Client Error" in str(exc_info.value)
         assert not api_client.is_logged_in()
 
     def test_login_network_error(self, mock_responses, api_client):
