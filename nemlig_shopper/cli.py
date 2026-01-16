@@ -3,7 +3,7 @@
 import click
 
 from .api import NemligAPI, NemligAPIError
-from .config import clear_credentials, get_credentials, save_credentials
+from .config import PANTRY_FILE, clear_credentials, get_credentials, save_credentials
 from .export import export_shopping_list
 from .favorites import (
     FavoritesError,
@@ -22,6 +22,16 @@ from .matcher import (
     match_ingredients,
     prepare_cart_items,
 )
+from .pantry import (
+    DEFAULT_PANTRY_ITEMS,
+    add_to_pantry,
+    clear_pantry,
+    filter_pantry_items,
+    identify_pantry_items,
+    load_pantry_config,
+    remove_from_pantry,
+)
+from .pantry_tui import interactive_pantry_check, simple_pantry_prompt
 from .planner import (
     MealPlan,
     create_meal_plan,
@@ -312,6 +322,8 @@ def search(query: str, limit: int):
 @click.option("--interactive", "-i", is_flag=True, help="Interactive review with TUI")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 @click.option("--save-as", help="Save as favorite with this name")
+@click.option("--skip-pantry-check", is_flag=True, help="Skip pantry item check")
+@click.option("--remember-pantry", is_flag=True, help="Remember excluded items as pantry")
 def add_to_cart(
     url: str,
     scale: float | None,
@@ -324,6 +336,8 @@ def add_to_cart(
     interactive: bool,
     yes: bool,
     save_as: str | None,
+    skip_pantry_check: bool,
+    remember_pantry: bool,
 ):
     """Parse a recipe and add matched products to cart."""
     api = get_api()
@@ -354,6 +368,57 @@ def add_to_cart(
         if factor != 1.0:
             scale_info = format_scale_info(factor, recipe.servings, new_servings)
             click.echo(f"Scaling: {scale_info}")
+
+        # Pantry check: identify and optionally exclude common household items
+        if not skip_pantry_check:
+            # Convert scaled ingredients to consolidated format for pantry check
+            from .planner import ConsolidatedIngredient
+
+            consolidated_for_pantry = [
+                ConsolidatedIngredient(
+                    name=ing.name,
+                    total_quantity=ing.scaled_quantity,
+                    unit=ing.unit,
+                    sources=[recipe.title],
+                )
+                for ing in scaled_ings
+            ]
+
+            pantry_config = load_pantry_config(PANTRY_FILE)
+            pantry_candidates, other_ings = identify_pantry_items(
+                consolidated_for_pantry, pantry_config
+            )
+
+            if pantry_candidates:
+                click.echo(f"\nFound {len(pantry_candidates)} potential pantry items.")
+
+                # Use TUI if interactive, otherwise simple prompt
+                if interactive:
+                    pantry_result = interactive_pantry_check(
+                        pantry_candidates, f"Pantry Check - {recipe.title}"
+                    )
+                else:
+                    pantry_result = simple_pantry_prompt(pantry_candidates)
+
+                if not pantry_result.confirmed:
+                    click.echo("Cancelled.")
+                    return
+
+                if pantry_result.excluded_items:
+                    click.echo(
+                        f"Excluding {len(pantry_result.excluded_items)} pantry items from shopping list."
+                    )
+
+                    # Remember pantry items if requested
+                    if remember_pantry and pantry_result.excluded_items:
+                        add_to_pantry(pantry_result.excluded_items, PANTRY_FILE)
+                        click.echo("✓ Saved excluded items to your pantry")
+
+                    # Filter out excluded items from scaled_ings
+                    excluded_names = {name.lower() for name in pantry_result.excluded_items}
+                    scaled_ings = [
+                        ing for ing in scaled_ings if ing.name.lower() not in excluded_names
+                    ]
 
         # Show preference mode
         if organic:
@@ -458,6 +523,8 @@ def display_meal_plan(plan: MealPlan) -> None:
 @click.option("--vegan", is_flag=True, help="Filter for vegan products")
 @click.option("--interactive", "-i", is_flag=True, help="Interactive review with TUI")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+@click.option("--skip-pantry-check", is_flag=True, help="Skip pantry item check")
+@click.option("--remember-pantry", is_flag=True, help="Remember excluded items as pantry")
 def plan_meals(
     urls: tuple[str, ...],
     file_path: str | None,
@@ -468,6 +535,8 @@ def plan_meals(
     vegan: bool,
     interactive: bool,
     yes: bool,
+    skip_pantry_check: bool,
+    remember_pantry: bool,
 ):
     """Plan meals from multiple recipe URLs.
 
@@ -520,6 +589,44 @@ def plan_meals(
 
         display_meal_plan(plan)
 
+        # Pantry check: identify and optionally exclude common household items
+        consolidated_to_match = plan.consolidated_ingredients
+        if not skip_pantry_check:
+            pantry_config = load_pantry_config(PANTRY_FILE)
+            pantry_candidates, other_ings = identify_pantry_items(
+                consolidated_to_match, pantry_config
+            )
+
+            if pantry_candidates:
+                click.echo(f"\nFound {len(pantry_candidates)} potential pantry items.")
+
+                # Use TUI if interactive, otherwise simple prompt
+                if interactive:
+                    pantry_result = interactive_pantry_check(
+                        pantry_candidates, "Pantry Check - Meal Plan"
+                    )
+                else:
+                    pantry_result = simple_pantry_prompt(pantry_candidates)
+
+                if not pantry_result.confirmed:
+                    click.echo("Cancelled.")
+                    return
+
+                if pantry_result.excluded_items:
+                    click.echo(
+                        f"Excluding {len(pantry_result.excluded_items)} pantry items from shopping list."
+                    )
+
+                    # Remember pantry items if requested
+                    if remember_pantry and pantry_result.excluded_items:
+                        add_to_pantry(pantry_result.excluded_items, PANTRY_FILE)
+                        click.echo("✓ Saved excluded items to your pantry")
+
+                    # Filter out excluded items
+                    consolidated_to_match = filter_pantry_items(
+                        consolidated_to_match, pantry_result.excluded_items
+                    )
+
         # Show preference mode
         if organic:
             click.echo("Mode: Preferring organic products")
@@ -536,7 +643,7 @@ def plan_meals(
 
         # Create ScaledIngredient objects from consolidated ingredients
         scaled_ings = []
-        for cons in plan.consolidated_ingredients:
+        for cons in consolidated_to_match:
             # Create a minimal Ingredient for the ScaledIngredient wrapper
             orig = Ingredient(
                 original=str(cons),
@@ -1064,6 +1171,134 @@ def preferences_clear(yes: bool):
 
     clear_preferences()
     click.echo("✓ Preferences cleared")
+
+
+# ============================================================================
+# Pantry Commands
+# ============================================================================
+
+
+@cli.group()
+def pantry():
+    """Manage your pantry items (ingredients you always have at home).
+
+    Pantry items are common household staples like salt, pepper, olive oil,
+    and sugar. When parsing recipes, you'll be prompted to exclude items
+    you already have at home.
+    """
+    pass
+
+
+@pantry.command("list")
+def pantry_list():
+    """List your saved pantry items."""
+    config = load_pantry_config(PANTRY_FILE)
+
+    # Get all active items
+    all_items = config.all_pantry_items
+
+    click.echo()
+    click.echo("YOUR PANTRY")
+    click.echo("=" * 50)
+
+    if config.user_items:
+        click.echo("\n📦 Custom items (added by you):")
+        for item in sorted(config.user_items):
+            click.echo(f"  • {item}")
+
+    default_active = DEFAULT_PANTRY_ITEMS - config.excluded_defaults
+    if default_active:
+        click.echo(f"\n📋 Default items ({len(default_active)} active):")
+        # Show first 10 defaults
+        sorted_defaults = sorted(default_active)
+        for item in sorted_defaults[:10]:
+            click.echo(f"  • {item}")
+        if len(sorted_defaults) > 10:
+            click.echo(f"  ... and {len(sorted_defaults) - 10} more")
+            click.echo("  (use 'nemlig pantry defaults' to see all)")
+
+    if config.excluded_defaults:
+        click.echo(f"\n🚫 Excluded defaults ({len(config.excluded_defaults)}):")
+        for item in sorted(config.excluded_defaults):
+            click.echo(f"  • {item}")
+
+    click.echo()
+    click.echo(f"Total active pantry items: {len(all_items)}")
+    click.echo()
+
+
+@pantry.command("add")
+@click.argument("items", nargs=-1, required=True)
+def pantry_add(items: tuple[str, ...]):
+    """Add items to your pantry.
+
+    Examples:
+
+        nemlig pantry add "fish sauce"
+
+        nemlig pantry add "sesame oil" "rice vinegar" "mirin"
+    """
+    add_to_pantry(list(items), PANTRY_FILE)
+    click.echo(f"✓ Added {len(items)} item(s) to pantry:")
+    for item in items:
+        click.echo(f"  • {item}")
+
+
+@pantry.command("remove")
+@click.argument("items", nargs=-1, required=True)
+def pantry_remove(items: tuple[str, ...]):
+    """Remove items from your pantry.
+
+    If the item is a default pantry item, it will be excluded
+    from the defaults. Otherwise, it's removed from your custom items.
+
+    Examples:
+
+        nemlig pantry remove "eggs"
+
+        nemlig pantry remove "salt" "pepper"
+    """
+    remove_from_pantry(list(items), PANTRY_FILE)
+    click.echo(f"✓ Removed {len(items)} item(s) from pantry:")
+    for item in items:
+        click.echo(f"  • {item}")
+
+
+@pantry.command("clear")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+def pantry_clear(yes: bool):
+    """Clear all pantry customizations.
+
+    This resets your pantry to the default items, removing
+    any custom items you've added and any exclusions.
+    """
+    if not yes:
+        if not click.confirm("Reset pantry to defaults?"):
+            click.echo("Cancelled.")
+            return
+
+    clear_pantry(PANTRY_FILE)
+    click.echo("✓ Pantry reset to defaults")
+
+
+@pantry.command("defaults")
+def pantry_defaults():
+    """Show default pantry items.
+
+    Lists all the built-in pantry items that are automatically
+    recognized as common household staples.
+    """
+    click.echo()
+    click.echo("DEFAULT PANTRY ITEMS")
+    click.echo("=" * 50)
+    click.echo(f"({len(DEFAULT_PANTRY_ITEMS)} items)")
+    click.echo()
+
+    # Show items sorted alphabetically
+    for item in sorted(DEFAULT_PANTRY_ITEMS):
+        click.echo(f"  • {item}")
+
+    click.echo()
 
 
 # ============================================================================

@@ -301,7 +301,10 @@ class TestAddCommand:
                         "nemlig_shopper.cli.prepare_cart_items",
                         return_value=[{"product_id": 1001, "quantity": 1}],
                     ):
-                        result = runner.invoke(cli, ["add", "https://example.com/recipe", "--yes"])
+                        result = runner.invoke(
+                            cli,
+                            ["add", "https://example.com/recipe", "--yes", "--skip-pantry-check"],
+                        )
 
         assert result.exit_code == 0
         assert "Added 2 products to cart" in result.output
@@ -345,6 +348,7 @@ class TestAddCommand:
                                 "--lactose-free",
                                 "--gluten-free",
                                 "--yes",
+                                "--skip-pantry-check",
                             ],
                         )
 
@@ -376,7 +380,9 @@ class TestAddCommand:
                     with patch("nemlig_shopper.cli.get_unmatched_ingredients", return_value=[]):
                         # Simulate user saying 'n' to confirmation
                         result = runner.invoke(
-                            cli, ["add", "https://example.com/recipe"], input="n\n"
+                            cli,
+                            ["add", "https://example.com/recipe", "--skip-pantry-check"],
+                            input="n\n",
                         )
 
         assert "Cancelled" in result.output
