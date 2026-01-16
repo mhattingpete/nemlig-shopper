@@ -9,3 +9,6 @@ build/
 .uv/
 .pytest_cache/
 .ruff_cache/
+
+# Local data files
+data/
