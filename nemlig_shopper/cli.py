@@ -310,6 +310,53 @@ def search(query: str, limit: int):
         raise SystemExit(1) from None
 
 
+@cli.command()
+def cart():
+    """View current shopping cart contents."""
+    api = get_api()
+
+    if not ensure_logged_in(api):
+        raise SystemExit(1)
+
+    try:
+        cart_data = api.get_cart()
+
+        items = cart_data.get("Lines", [])
+        total = cart_data.get("TotalProductsPrice", 0)
+        item_count = cart_data.get("NumberOfProducts", 0)
+        delivery = cart_data.get("DeliveryPrice", 0)
+        delivery_time = cart_data.get("FormattedDeliveryTime", "")
+
+        if not items:
+            click.echo("Your cart is empty.")
+            click.echo("\nUse 'nemlig add <recipe-url>' to add items.")
+            return
+
+        click.echo()
+        click.echo("SHOPPING CART")
+        click.echo("=" * 60)
+
+        for item in items:
+            name = item.get("ProductName", "Unknown")
+            qty = item.get("Quantity", 1)
+            price = item.get("Total", item.get("Price", 0))
+            click.echo(f"  {qty}x {name} - {price:.2f} DKK")
+
+        click.echo("-" * 60)
+        click.echo(f"Products: {item_count}")
+        click.echo(f"Subtotal: {total:.2f} DKK")
+        click.echo(f"Delivery: {delivery:.2f} DKK")
+        click.echo(f"Total: {total + delivery:.2f} DKK")
+        if delivery_time:
+            click.echo(f"\nDelivery: {delivery_time}")
+        click.echo()
+        click.echo("View online: https://www.nemlig.com/LeveringsInfo")
+
+    except NemligAPIError as e:
+        click.echo(f"✗ Failed to get cart: {e}", err=True)
+        raise SystemExit(1) from None
+
+
 @cli.command("add")
 @click.argument("url")
 @click.option("--scale", "-s", type=float, help="Scale recipe by multiplier")
