@@ -122,6 +122,67 @@ SNACK_CATEGORIES: set[str] = {
     "Kiosk",
 }
 
+# Search term improvements for better matching
+# Maps generic terms to more specific search queries
+SEARCH_TERM_IMPROVEMENTS: dict[str, str] = {
+    # Vegetables - prefer specific varieties
+    "tomat": "cherrytomater",
+    "tomater": "cherrytomater",
+    # Tortillas/wraps
+    "madpandekager": "tortilla wraps",
+    "tortilla": "tortilla wraps",
+    # Cheese - context dependent but default to shredded for cooking
+    "revet ost": "revet mozzarella",
+    # Salsa - default to taco salsa
+    "salsa": "taco salsa",
+    # Bread
+    "morgenbrød": "toastbrød",
+    "rugbrød": "rugbrød øko",
+    # Dairy
+    "mælk": "letmælk",
+    # Meat
+    "kylling": "kyllingebrystfilet",
+    "kyllingebryst": "kyllingebrystfilet",
+    # Rice
+    "ris": "jasminris",
+    # Stock/bouillon
+    "hønsebouillonterning": "hønsebouillon",
+    "hønsebouillon terning": "hønsebouillon",
+    "kyllingebouillon": "hønsebouillon",
+    "bouillonterning": "hønsebouillon",
+}
+
+# Context-specific search improvements
+# Maps (ingredient, meal_context) to better search query
+# Note: These search terms have been tested against the Nemlig API
+CONTEXT_SEARCH_IMPROVEMENTS: dict[tuple[str, str], str] = {
+    ("ost", "mexicansk"): "revet mozzarella",
+    ("ost", "taco"): "revet mozzarella",
+    ("ost", "pizza"): "pizzaost",
+    ("ost", "pasta"): "parmesan",
+    ("ost", "burger"): "cheddar revet",
+    ("salsa", "mexicansk"): "taco salsa dip",
+    ("salsa", "taco"): "taco salsa dip",
+}
+
+# Ambiguous terms that should prompt for user clarification
+AMBIGUOUS_TERMS: set[str] = {
+    "frugt",
+    "grønt",
+    "grøntsager",
+    "pålæg",
+    "morgen pålæg",
+    "morgenpålæg",
+    "kød",
+    "fisk",
+    "ost",  # Without context, ost is ambiguous
+    "brød",
+    "slik",
+    "snacks",
+    "drikkevarer",
+    "juice",  # Many types of juice
+}
+
 
 @dataclass
 class ProductMatch:
@@ -347,6 +408,12 @@ def score_product_match(
     if query_lower in product_name:
         score += 50
 
+    # Boost if all words of the search query appear in the product name
+    # This helps context-specific searches like "revet mozzarella" match better
+    query_words = set(query_lower.split())
+    if query_words and all(word in product_name for word in query_words):
+        score += 75
+
     # Boost for each word of the ingredient that appears in product name
     ingredient_words = set(ingredient_lower.split())
     for word in ingredient_words:
@@ -384,12 +451,23 @@ def score_product_match(
 
     # Extra penalty when the ingredient appears only as a flavour
     # e.g. "sour cream & onion" chips when we want actual onions
-    flavor_indicators = ["&", " m. ", " med ", " smag "]
+    # But don't penalize when the & is part of a product name like "mozzarella & cheddar"
+    flavor_indicators = [" m. ", " med ", " smag "]
     for flavor_indicator in flavor_indicators:
         if flavor_indicator in product_name:
             before, after = product_name.split(flavor_indicator, 1)
             if any(word in after for word in ingredient_words):
                 score -= 60
+
+    # Special handling for & - only penalize if ingredient word appears after &
+    if "&" in product_name:
+        before, after = product_name.split("&", 1)
+        # Only penalize if the ingredient word appears ONLY after the &
+        # (like "sour cream & onion" when searching for onion)
+        if any(word in after for word in ingredient_words) and not any(
+            word in before for word in ingredient_words
+        ):
+            score -= 60
 
     # Extra penalty for obvious cleaning / personal care products
     cleaning_terms = {
@@ -413,23 +491,42 @@ def score_product_match(
     return score
 
 
-def generate_search_queries(ingredient_name: str) -> list[str]:
+def generate_search_queries(
+    ingredient_name: str,
+    meal_context: str | None = None,
+) -> list[str]:
     """
     Generate multiple search queries for an ingredient.
 
     Prioritizes Danish translations for better results on Nemlig.com.
+    Uses context-specific improvements when meal context is provided.
 
     Args:
         ingredient_name: The ingredient name
+        meal_context: Optional meal context for better matching (e.g., "mexicansk", "pizza")
 
     Returns:
         List of search queries to try, in order of preference
     """
     queries = []
+    name_lower = ingredient_name.lower().strip()
 
-    # Try Danish translation first (most likely to get good results)
+    # Check for context-specific improvements first
+    # Use partial matching: context "mexicanske pandekager" matches key "mexicansk"
+    if meal_context:
+        context_lower = meal_context.lower()
+        for (ing_key, ctx_key), search_query in CONTEXT_SEARCH_IMPROVEMENTS.items():
+            if name_lower == ing_key and ctx_key in context_lower:
+                queries.append(search_query)
+                break  # Use first match
+
+    # Check for general search term improvements
+    if name_lower in SEARCH_TERM_IMPROVEMENTS:
+        queries.append(SEARCH_TERM_IMPROVEMENTS[name_lower])
+
+    # Try Danish translation
     danish = translate_ingredient(ingredient_name)
-    if danish:
+    if danish and danish not in queries:
         queries.append(danish)
 
     # Original name (cleaned)
@@ -438,8 +535,8 @@ def generate_search_queries(ingredient_name: str) -> list[str]:
         queries.append(cleaned)
 
     # Original name as-is if different from cleaned
-    if ingredient_name.lower() != cleaned and ingredient_name.lower() not in queries:
-        queries.append(ingredient_name.lower())
+    if name_lower != cleaned and name_lower not in queries:
+        queries.append(name_lower)
 
     # First word only (often the main ingredient)
     words = cleaned.split()
@@ -453,6 +550,11 @@ def generate_search_queries(ingredient_name: str) -> list[str]:
             queries.append(first_word)
 
     return queries
+
+
+def is_ambiguous_term(ingredient_name: str) -> bool:
+    """Check if an ingredient term is ambiguous and needs user clarification."""
+    return ingredient_name.lower().strip() in AMBIGUOUS_TERMS
 
 
 def filter_by_dietary_requirements(
@@ -517,6 +619,70 @@ def _get_dietary_alternative_query(
     return get_safe_alternative_query(ingredient_name, allergies, dietary)
 
 
+def _apply_smart_organic_preference(
+    products: list[dict[str, Any]],
+    organic_price_threshold: float = 15.0,
+) -> list[dict[str, Any]]:
+    """
+    Apply smart organic preference: prefer organic if price diff < threshold.
+
+    This finds the cheapest conventional product and compares organic options.
+    Organic products within the threshold of the cheapest are boosted.
+
+    Args:
+        products: List of products to process
+        organic_price_threshold: Maximum extra cost for organic (default 15 DKK)
+
+    Returns:
+        Products with organic preference scores applied
+    """
+    if not products:
+        return products
+
+    # Find cheapest conventional product
+    cheapest_conventional_price = float("inf")
+    for product in products:
+        product_name = (product.get("name") or "").lower()
+        labels = product.get("labels", [])
+        is_organic = "øko" in product_name or any(
+            "økologisk"
+            in (str(label).lower() if isinstance(label, str) else label.get("name", "").lower())
+            for label in (labels if isinstance(labels, list) else [])
+        )
+        if not is_organic:
+            price = product.get("price") or float("inf")
+            if price < cheapest_conventional_price:
+                cheapest_conventional_price = price
+
+    # If no conventional products, just return as-is
+    if cheapest_conventional_price == float("inf"):
+        return products
+
+    # Add organic preference score
+    for product in products:
+        product_name = (product.get("name") or "").lower()
+        labels = product.get("labels", [])
+        is_organic = "øko" in product_name or any(
+            "økologisk"
+            in (str(label).lower() if isinstance(label, str) else label.get("name", "").lower())
+            for label in (labels if isinstance(labels, list) else [])
+        )
+
+        if is_organic:
+            price = product.get("price") or float("inf")
+            price_diff = price - cheapest_conventional_price
+            if price_diff <= organic_price_threshold:
+                # Boost organic products within threshold
+                product["_organic_bonus"] = 100  # High bonus for smart organic
+            else:
+                # Organic but too expensive
+                product["_organic_bonus"] = -10  # Small penalty
+        else:
+            product["_organic_bonus"] = 0
+
+    return products
+
+
 def match_ingredient(
     api: NemligAPI,
     ingredient_name: str,
@@ -526,6 +692,9 @@ def match_ingredient(
     *,
     prefer_organic: bool = False,
     prefer_budget: bool = False,
+    smart_organic: bool = False,
+    organic_price_threshold: float = 15.0,
+    meal_context: str | None = None,
     allergies: list[str] | None = None,
     dietary: list[str] | None = None,
 ) -> ProductMatch:
@@ -537,7 +706,7 @@ def match_ingredient(
     - Food categories over non-food categories
     - Products where the ingredient name appears in the product name
     - Available products over out-of-stock ones
-    - Organic products (if prefer_organic=True)
+    - Organic products (if prefer_organic=True or smart_organic=True)
     - Cheaper products (if prefer_budget=True)
 
     When allergies or dietary restrictions are specified, uses a hybrid approach:
@@ -553,19 +722,22 @@ def match_ingredient(
         max_alternatives: Maximum alternative products to return
         prefer_organic: Boost organic products in scoring
         prefer_budget: Boost cheaper products in scoring
+        smart_organic: Prefer organic only if price diff < organic_price_threshold
+        organic_price_threshold: Max extra cost for organic (default 15 DKK)
+        meal_context: Optional meal context for better matching (e.g., "mexicansk")
         allergies: List of allergen types to avoid (e.g., ["lactose", "gluten"])
         dietary: List of dietary restrictions (e.g., ["vegan", "vegetarian"])
 
     Returns:
         ProductMatch with best match and alternatives
     """
-    queries = generate_search_queries(ingredient_name)
+    queries = generate_search_queries(ingredient_name, meal_context=meal_context)
     all_products: list[dict[str, Any]] = []
     used_query = queries[0] if queries else ingredient_name
 
     # Collect products from multiple queries for better selection
     seen_ids: set[int] = set()
-    for query in queries:
+    for query_idx, query in enumerate(queries):
         try:
             # Get more results to have a better selection pool
             products = api.search_products(query, limit=max_alternatives * 3 + 5)
@@ -576,6 +748,8 @@ def match_ingredient(
                         seen_ids.add(product_id)
                         # Store the query that found this product for scoring
                         product["_search_query"] = query
+                        # Mark products from context-specific query (first query)
+                        product["_is_context_match"] = query_idx == 0 and meal_context is not None
                         all_products.append(product)
                 if not used_query or used_query == ingredient_name:
                     used_query = query
@@ -583,6 +757,10 @@ def match_ingredient(
             continue
 
     if all_products:
+        # Apply smart organic preference if enabled
+        if smart_organic:
+            all_products = _apply_smart_organic_preference(all_products, organic_price_threshold)
+
         # Score and sort products by relevance
         scored_products = [
             (
@@ -593,16 +771,20 @@ def match_ingredient(
                     product.get("_search_query", used_query),
                     prefer_organic=prefer_organic,
                     prefer_budget=prefer_budget,
-                ),
+                )
+                + product.get("_organic_bonus", 0)  # Add smart organic bonus
+                + (200 if product.get("_is_context_match") else 0),  # Boost context matches
             )
             for product in all_products
         ]
         scored_products.sort(key=lambda x: x[1], reverse=True)
 
-        # Clean up the internal field and extract sorted products
+        # Clean up internal fields and extract sorted products
         sorted_products = []
         for product, _score in scored_products:
             product.pop("_search_query", None)
+            product.pop("_organic_bonus", None)
+            product.pop("_is_context_match", None)
             sorted_products.append(product)
 
         # === PHASE 1: Filter by dietary requirements ===
@@ -699,6 +881,9 @@ def match_ingredients(
     *,
     prefer_organic: bool = False,
     prefer_budget: bool = False,
+    smart_organic: bool = False,
+    organic_price_threshold: float = 15.0,
+    meal_context: str | None = None,
     allergies: list[str] | None = None,
     dietary: list[str] | None = None,
 ) -> list[ProductMatch]:
@@ -711,6 +896,9 @@ def match_ingredients(
         max_alternatives: Maximum alternatives per ingredient
         prefer_organic: Boost organic products in scoring
         prefer_budget: Boost cheaper products in scoring
+        smart_organic: Prefer organic only if price diff < threshold
+        organic_price_threshold: Max extra cost for organic (default 15 DKK)
+        meal_context: Optional meal context for context-aware matching
         allergies: List of allergen types to avoid (e.g., ["lactose", "gluten"])
         dietary: List of dietary restrictions (e.g., ["vegan", "vegetarian"])
 
@@ -728,6 +916,9 @@ def match_ingredients(
             max_alternatives,
             prefer_organic=prefer_organic,
             prefer_budget=prefer_budget,
+            smart_organic=smart_organic,
+            organic_price_threshold=organic_price_threshold,
+            meal_context=meal_context,
             allergies=allergies,
             dietary=dietary,
         )
