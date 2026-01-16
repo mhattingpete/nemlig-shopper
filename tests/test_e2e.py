@@ -9,6 +9,21 @@ import pytest
 from nemlig_shopper.recipe_parser import parse_recipe_url
 
 
+@pytest.fixture
+def authenticated_api():
+    """Create an authenticated NemligAPI instance."""
+    from nemlig_shopper.api import NemligAPI
+    from nemlig_shopper.config import get_credentials
+
+    api = NemligAPI()
+    creds = get_credentials()
+    if creds:
+        email, password = creds
+        if email and password:
+            api.login(email, password)
+    return api
+
+
 class TestRecipeParsing:
     """Test parsing recipes from real URLs."""
 
@@ -55,32 +70,26 @@ class TestIngredientMatching:
     """Test ingredient to product matching (no cart operations)."""
 
     @pytest.mark.integration
-    def test_match_common_ingredients(self):
+    def test_match_common_ingredients(self, authenticated_api):
         """Test that common Danish ingredients can be matched."""
-        from nemlig_shopper.api import NemligAPI
         from nemlig_shopper.matcher import match_ingredient
-
-        api = NemligAPI()
 
         # Test common ingredients - should find matches
         test_ingredients = ["pasta", "løg", "mælk", "smør", "æg"]
 
         for ingredient in test_ingredients:
-            match = match_ingredient(api, ingredient)
+            match = match_ingredient(authenticated_api, ingredient)
             assert match.matched, f"Failed to match: {ingredient}"
             assert match.product is not None
             assert match.product.get("name") is not None
 
     @pytest.mark.integration
-    def test_translation_works(self):
+    def test_translation_works(self, authenticated_api):
         """Test that English ingredients are translated to Danish."""
-        from nemlig_shopper.api import NemligAPI
         from nemlig_shopper.matcher import match_ingredient
 
-        api = NemligAPI()
-
         # English ingredients should be translated and matched
-        match = match_ingredient(api, "milk")
+        match = match_ingredient(authenticated_api, "milk")
         assert match.matched
         assert match.product is not None
         # Should find Danish milk product
@@ -91,9 +100,8 @@ class TestFullPipeline:
     """Test the full recipe-to-matches pipeline."""
 
     @pytest.mark.integration
-    def test_recipe_to_matches_pipeline(self):
+    def test_recipe_to_matches_pipeline(self, authenticated_api):
         """Test parsing a recipe and matching all ingredients."""
-        from nemlig_shopper.api import NemligAPI
         from nemlig_shopper.matcher import match_ingredients
         from nemlig_shopper.recipe_parser import parse_recipe_url
         from nemlig_shopper.scaler import scale_recipe
@@ -110,8 +118,7 @@ class TestFullPipeline:
         assert len(scaled_ingredients) == len(recipe.ingredients)
 
         # Match to products
-        api = NemligAPI()
-        matches = match_ingredients(api, scaled_ingredients)
+        matches = match_ingredients(authenticated_api, scaled_ingredients)
 
         assert len(matches) == len(recipe.ingredients)
 
