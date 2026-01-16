@@ -19,6 +19,8 @@ from .matcher import (
     ProductMatch,
     calculate_total_cost,
     get_unmatched_ingredients,
+    is_ambiguous_term,
+    match_ingredient,
     match_ingredients,
     prepare_cart_items,
 )
@@ -34,6 +36,7 @@ from .pantry import (
 from .pantry_tui import interactive_pantry_check, simple_pantry_prompt
 from .planner import (
     MealPlan,
+    consolidate_ingredients,
     create_meal_plan,
     load_urls_from_file,
 )
@@ -46,7 +49,7 @@ from .preferences import (
 )
 from .price_tracker import get_tracker, record_search_prices
 from .recipe_parser import Recipe, parse_recipe_text, parse_recipe_url
-from .scaler import format_scale_info, scale_recipe
+from .scaler import ScaledIngredient, format_scale_info, scale_recipe
 from .tui import interactive_review
 
 # Shared API instance
@@ -550,6 +553,88 @@ def add_to_cart(
 # ============================================================================
 
 
+def parse_shopping_text(text: str) -> tuple[list[str], list[tuple[str, str | None]]]:
+    """
+    Parse shopping text to extract URLs and manual items with meal context.
+
+    Args:
+        text: Multi-line text with recipe URLs and/or ingredient items
+
+    Returns:
+        Tuple of (urls, items_with_context) where items_with_context is
+        list of (item_name, meal_context) tuples. The meal_context is
+        derived from section headers like "Mexicanske pandekager:".
+    """
+    import re
+
+    urls = []
+    items: list[tuple[str, str | None]] = []
+
+    # Current meal context (from section headers)
+    current_meal_context: str | None = None
+    # Track if we've seen a URL recently (to reset context after URL sections)
+    seen_url_in_section = False
+
+    # Patterns for headers to skip (but extract meal context from)
+    weekdays = ["mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag", "søndag"]
+    # Date patterns like "5-6 jan", "d. 5", "januar", etc.
+    date_pattern = re.compile(
+        r"\b\d{1,2}[-/]?\d{0,2}\s*(jan|feb|mar|apr|maj|jun|jul|aug|sep|okt|nov|dec)", re.I
+    )
+    date_pattern2 = re.compile(r"\bd\.\s*\d{1,2}", re.I)
+
+    for line in text.split("\n"):
+        line = line.strip()
+        # Empty lines after URL sections reset context
+        # (staple items like Mælk, Brød typically come after empty line)
+        if not line:
+            if seen_url_in_section:
+                current_meal_context = None
+                seen_url_in_section = False
+            continue
+
+        line_lower = line.lower()
+
+        # Check if it's a URL
+        if line.startswith("http://") or line.startswith("https://"):
+            urls.append(line)
+            seen_url_in_section = True
+            continue
+
+        # Skip lines that contain weekday names (likely date headers)
+        # These indicate a new section, reset context
+        if any(day in line_lower for day in weekdays):
+            current_meal_context = None
+            continue
+
+        # Skip lines with date patterns - also reset context
+        if date_pattern.search(line) or date_pattern2.search(line):
+            current_meal_context = None
+            continue
+
+        # Check for meal section headers (lines ending with colon that aren't dates)
+        # These provide meal context for subsequent items
+        if line.endswith(":"):
+            # Extract meal context from header (remove colon)
+            header = line[:-1].strip()
+            # Skip generic headers like "Andet:"
+            if header.lower() not in {"andet", "other", "diverse", "ekstra"}:
+                current_meal_context = header.lower()
+            else:
+                current_meal_context = None
+            continue
+
+        # Skip recipe title lines (common patterns) but note they might set context
+        if any(phrase in line_lower for phrase in ["one pot", "opskrift", "fra opskrift"]):
+            # Could extract meal name from these lines too
+            continue
+
+        # It's a manual item - associate with current meal context
+        items.append((line, current_meal_context))
+
+    return urls, items
+
+
 def display_meal_plan(plan: MealPlan) -> None:
     """Display a meal plan with consolidated ingredients."""
     click.echo()
@@ -757,6 +842,347 @@ def plan_meals(
         click.echo(f"\n✓ Added {success_count} products to cart")
         if fail_count:
             click.echo(f"✗ Failed to add {fail_count} products")
+
+    except ImportError as e:
+        click.echo(f"✗ {e}", err=True)
+        raise SystemExit(1) from None
+    except Exception as e:
+        click.echo(f"✗ Error: {e}", err=True)
+        raise SystemExit(1) from None
+
+
+@cli.command("shop")
+@click.option("--text", "-t", "input_text", help="Shopping list as inline text")
+@click.option("--file", "-f", "file_path", type=click.Path(exists=True), help="Load from file")
+@click.option("--organic", "-o", is_flag=True, help="Prefer organic (within 15kr of cheapest)")
+@click.option("--no-organic", is_flag=True, help="Never prefer organic products")
+@click.option("--budget", "-b", is_flag=True, help="Prefer cheapest products")
+@click.option(
+    "--organic-threshold",
+    type=float,
+    default=15.0,
+    help="Max extra cost for organic (default 15 DKK)",
+)
+@click.option("--lactose-free", is_flag=True, help="Filter for lactose-free products")
+@click.option("--gluten-free", is_flag=True, help="Filter for gluten-free products")
+@click.option("--vegan", is_flag=True, help="Filter for vegan products")
+@click.option("--interactive", "-i", is_flag=True, help="Interactive review with TUI")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+@click.option("--skip-pantry-check", is_flag=True, help="Skip pantry item check")
+@click.option("--skip-ambiguous-check", is_flag=True, help="Skip prompts for ambiguous items")
+@click.option("--remember-pantry", is_flag=True, help="Remember excluded items as pantry")
+@click.option("--dry-run", is_flag=True, help="Show what would be added without adding to cart")
+def shop(
+    input_text: str | None,
+    file_path: str | None,
+    organic: bool,
+    no_organic: bool,
+    budget: bool,
+    organic_threshold: float,
+    lactose_free: bool,
+    gluten_free: bool,
+    vegan: bool,
+    interactive: bool,
+    yes: bool,
+    skip_pantry_check: bool,
+    skip_ambiguous_check: bool,
+    remember_pantry: bool,
+    dry_run: bool,
+):
+    """Shop from inline text containing recipes and items.
+
+    Parses recipe URLs and manual items from text, consolidates ingredients,
+    and adds everything to your cart.
+
+    The text can contain:
+    - Recipe URLs (any line starting with http:// or https://)
+    - Manual items (ingredient names like "mælk", "brød", "2x æg")
+    - Headers/dates are automatically skipped
+
+    Examples:
+
+        nemlig shop --text "mælk, brød, æg"
+
+        nemlig shop --text "https://recipe.com/pasta
+        mælk
+        brød
+        2x æg"
+
+        nemlig shop -t "$(cat shopping-list.txt)" --organic
+
+        echo "mælk, brød" | nemlig shop --text -
+    """
+    api = get_api()
+
+    if not ensure_logged_in(api):
+        raise SystemExit(1)
+
+    # Get input text from option, file, or stdin
+    if input_text == "-":
+        # Read from stdin
+        import sys
+
+        input_text = sys.stdin.read()
+    elif file_path:
+        with open(file_path) as f:
+            input_text = f.read()
+    elif not input_text:
+        click.echo("✗ No input provided. Use --text or --file.", err=True)
+        raise SystemExit(1)
+
+    # Build dietary filter lists
+    allergies: list[str] = []
+    dietary: list[str] = []
+    if lactose_free:
+        allergies.append("lactose")
+    if gluten_free:
+        allergies.append("gluten")
+    if vegan:
+        dietary.append("vegan")
+
+    try:
+        # Parse input to extract URLs and manual items
+        # Handle comma-separated items
+        if "," in input_text and "\n" not in input_text:
+            input_text = input_text.replace(",", "\n")
+
+        urls, items_with_context = parse_shopping_text(input_text)
+
+        click.echo(f"Found {len(urls)} recipe URL(s) and {len(items_with_context)} manual item(s)")
+
+        # Parse recipes if any URLs
+        # Store (ScaledIngredient, source, meal_context) tuples
+        all_ingredients: list[tuple[ScaledIngredient, str, str | None]] = []
+        recipes: list[Recipe] = []
+
+        if urls:
+            click.echo(f"\nParsing {len(urls)} recipes...")
+            for url in urls:
+                try:
+                    recipe = parse_recipe_url(url)
+                    recipes.append(recipe)
+                    click.echo(f"  ✓ {recipe.title}")
+
+                    # Derive meal context from recipe title
+                    recipe_context = recipe.title.lower() if recipe.title else None
+
+                    # Scale ingredients (1x by default)
+                    scaled_ings, _, _ = scale_recipe(recipe)
+                    for ing in scaled_ings:
+                        all_ingredients.append((ing, recipe.title, recipe_context))
+                except Exception as e:
+                    click.echo(f"  ✗ Failed to parse {url}: {e}", err=True)
+
+        # Parse manual items with their meal context
+        if items_with_context:
+            click.echo("\nManual items:")
+            from .recipe_parser import parse_ingredient_text
+
+            for item, meal_context in items_with_context:
+                ingredient = parse_ingredient_text(item)
+                scaled = ScaledIngredient(
+                    original=ingredient,
+                    scaled_quantity=ingredient.quantity,
+                    scale_factor=1.0,
+                )
+                all_ingredients.append((scaled, "Manual item", meal_context))
+                context_str = f" [{meal_context}]" if meal_context else ""
+                click.echo(f"  • {ingredient.name}{context_str}")
+
+        if not all_ingredients:
+            click.echo("✗ No ingredients to shop for.", err=True)
+            raise SystemExit(1)
+
+        # Build meal context mapping before consolidation
+        # Maps ingredient name (lowercase) -> meal context
+        ingredient_context_map: dict[str, str | None] = {}
+        for ing, _source, meal_context in all_ingredients:
+            name_lower = ing.name.lower()
+            # Keep the first/most specific context for each ingredient
+            if name_lower not in ingredient_context_map and meal_context:
+                ingredient_context_map[name_lower] = meal_context
+
+        # Consolidate ingredients (convert to old format for consolidate_ingredients)
+        ingredients_for_consolidation = [(ing, source) for ing, source, _ in all_ingredients]
+        consolidated = consolidate_ingredients(ingredients_for_consolidation)
+        click.echo(f"\nConsolidated to {len(consolidated)} unique ingredients")
+
+        # Pantry check
+        consolidated_to_match = consolidated
+        if not skip_pantry_check:
+            pantry_config = load_pantry_config(PANTRY_FILE)
+            pantry_candidates, other_ings = identify_pantry_items(consolidated, pantry_config)
+
+            if pantry_candidates:
+                click.echo(f"\nFound {len(pantry_candidates)} potential pantry items.")
+
+                # Use TUI if interactive, otherwise simple prompt
+                if interactive:
+                    pantry_result = interactive_pantry_check(pantry_candidates, "Pantry Check")
+                else:
+                    pantry_result = simple_pantry_prompt(pantry_candidates)
+
+                if not pantry_result.confirmed:
+                    click.echo("Cancelled.")
+                    return
+
+                if pantry_result.excluded_items:
+                    click.echo(
+                        f"Excluding {len(pantry_result.excluded_items)} pantry items from shopping list."
+                    )
+
+                    # Remember pantry items if requested
+                    if remember_pantry and pantry_result.excluded_items:
+                        add_to_pantry(pantry_result.excluded_items, PANTRY_FILE)
+                        click.echo("✓ Saved excluded items to your pantry")
+
+                    # Filter out excluded items
+                    consolidated_to_match = filter_pantry_items(
+                        consolidated, pantry_result.excluded_items
+                    )
+
+        # Handle ambiguous terms - prompt user to specify or skip
+        if not skip_ambiguous_check and not yes:
+            ambiguous_items = [c for c in consolidated_to_match if is_ambiguous_term(c.name)]
+            if ambiguous_items:
+                click.echo(
+                    f"\n⚠ Found {len(ambiguous_items)} ambiguous item(s) that need clarification:"
+                )
+                items_to_skip = []
+                items_to_replace = {}
+
+                for item in ambiguous_items:
+                    click.echo(f"\n  '{item.name}' is ambiguous.")
+                    click.echo("  Options:")
+                    click.echo("    1. Skip this item")
+                    click.echo("    2. Specify what you want (e.g., 'æbler' instead of 'frugt')")
+                    click.echo("    3. Keep as-is (search will be generic)")
+
+                    choice = click.prompt(
+                        "  Choice", type=click.Choice(["1", "2", "3"]), default="3"
+                    )
+
+                    if choice == "1":
+                        items_to_skip.append(item.name.lower())
+                    elif choice == "2":
+                        replacement = click.prompt("  What should we search for instead")
+                        if replacement:
+                            items_to_replace[item.name.lower()] = replacement
+
+                # Apply skips and replacements
+                if items_to_skip or items_to_replace:
+                    filtered_consolidated = []
+                    for cons in consolidated_to_match:
+                        name_lower = cons.name.lower()
+                        if name_lower in items_to_skip:
+                            click.echo(f"  Skipping: {cons.name}")
+                            continue
+                        if name_lower in items_to_replace:
+                            # Create a new ConsolidatedIngredient with the replacement name
+                            from .planner import ConsolidatedIngredient
+
+                            cons = ConsolidatedIngredient(
+                                name=items_to_replace[name_lower],
+                                total_quantity=cons.total_quantity,
+                                unit=cons.unit,
+                                sources=cons.sources,
+                            )
+                            click.echo(f"  Replaced: {name_lower} → {cons.name}")
+                        filtered_consolidated.append(cons)
+                    consolidated_to_match = filtered_consolidated
+
+        # Determine organic preference mode
+        # Default: smart organic (prefer organic if price diff < threshold)
+        # --organic: always prefer organic
+        # --no-organic: never prefer organic
+        # --budget: prefer cheapest (no organic preference)
+        use_smart_organic = not no_organic and not budget
+        use_prefer_organic = organic and not budget
+
+        # Show preference mode
+        if use_prefer_organic:
+            click.echo("Mode: Always preferring organic products")
+        elif use_smart_organic:
+            click.echo(
+                f"Mode: Smart organic (prefer if within {organic_threshold:.0f} DKK of cheapest)"
+            )
+        if budget:
+            click.echo("Mode: Preferring budget-friendly products")
+        if allergies or dietary:
+            filters = allergies + dietary
+            click.echo(f"Dietary filters: {', '.join(filters)}")
+
+        # Match each ingredient with its meal context
+        click.echo("\nMatching ingredients to products...")
+
+        matches = []
+        for cons in consolidated_to_match:
+            # Look up meal context for this ingredient
+            meal_context = ingredient_context_map.get(cons.name.lower())
+
+            match = match_ingredient(
+                api,
+                cons.name,
+                cons.total_quantity,
+                cons.unit,
+                prefer_organic=use_prefer_organic,
+                prefer_budget=budget,
+                smart_organic=use_smart_organic,
+                organic_price_threshold=organic_threshold,
+                meal_context=meal_context,
+                allergies=allergies if allergies else None,
+                dietary=dietary if dietary else None,
+            )
+            matches.append(match)
+
+        # Interactive mode: use TUI for review
+        if interactive:
+            title = f"Shopping ({len(recipes)} recipes)" if recipes else "Shopping"
+            review_result = interactive_review(matches, title)
+            if not review_result.confirmed:
+                click.echo("Cancelled.")
+                return
+            matches = review_result.matches
+        else:
+            display_matches(matches, show_alternatives=True)
+
+            # Check for unmatched
+            unmatched = get_unmatched_ingredients(matches)
+            if unmatched:
+                click.echo(f"\n⚠ {len(unmatched)} ingredients could not be matched:")
+                for name in unmatched:
+                    click.echo(f"  - {name}")
+
+        # Dry run: just show what would be added
+        if dry_run:
+            click.echo("\n--- DRY RUN ---")
+            click.echo("The following products would be added to cart:")
+            total = calculate_total_cost(matches)
+            matched_count = sum(1 for m in matches if m.matched)
+            click.echo(f"Products: {matched_count}")
+            click.echo(f"Estimated total: {total:.2f} DKK")
+            click.echo("\nRun without --dry-run to add to cart.")
+            return
+
+        # Confirm
+        if not yes:
+            if not click.confirm("\nAdd matched products to cart?"):
+                click.echo("Cancelled.")
+                return
+
+        # Add to cart
+        cart_items = prepare_cart_items(matches)
+        result = api.add_multiple_to_cart(cart_items)
+
+        success_count = len(result["success"])
+        fail_count = len(result["failed"])
+
+        click.echo(f"\n✓ Added {success_count} products to cart")
+        if fail_count:
+            click.echo(f"✗ Failed to add {fail_count} products")
+
+        # Show cart link
+        click.echo("\nView cart: https://www.nemlig.com/LeveringsInfo")
 
     except ImportError as e:
         click.echo(f"✗ {e}", err=True)

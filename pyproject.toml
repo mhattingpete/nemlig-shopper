@@ -27,6 +27,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "websockets>=16.0",
     "textual>=0.50.0",
+    "httpx>=0.28.1",
+    "beautifulsoup4>=4.14.3",
 ]
 
 [project.scripts]

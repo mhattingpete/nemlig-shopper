@@ -9,11 +9,21 @@ if TYPE_CHECKING:
 
 try:
     from recipe_scrapers import scrape_me
+    from recipe_scrapers._exceptions import WebsiteNotImplementedError
 
     SCRAPERS_AVAILABLE = True
 except ImportError:
     SCRAPERS_AVAILABLE = False
     scrape_me = None  # type: ignore[assignment]
+    WebsiteNotImplementedError = Exception  # type: ignore[misc,assignment]
+
+try:
+    import httpx
+    from bs4 import BeautifulSoup
+
+    WEB_SCRAPING_AVAILABLE = True
+except ImportError:
+    WEB_SCRAPING_AVAILABLE = False
 
 
 @dataclass
@@ -356,9 +366,206 @@ def parse_ingredients_text(text: str) -> list[Ingredient]:
     return ingredients
 
 
+def _extract_json_ld_recipe(soup: "BeautifulSoup") -> dict[str, Any] | None:
+    """Extract recipe data from JSON-LD script tags."""
+    import json
+
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string or "")
+
+            # Handle both single object and array formats
+            if isinstance(data, list):
+                for item in data:
+                    if item.get("@type") == "Recipe":
+                        return item
+            elif data.get("@type") == "Recipe":
+                return data
+            elif "@graph" in data:
+                for item in data["@graph"]:
+                    if item.get("@type") == "Recipe":
+                        return item
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    return None
+
+
+def _extract_nuxt_data(soup: "BeautifulSoup") -> dict[str, Any] | None:
+    """Extract recipe data from Nuxt.js __NUXT_DATA__ or similar."""
+    import json
+
+    # Look for Nuxt data script
+    for script in soup.find_all("script"):
+        script_text = script.string or ""
+        if "__NUXT__" in script_text or "window.__NUXT__" in script_text:
+            # Try to extract JSON from the script
+            match = re.search(r"window\.__NUXT__\s*=\s*({.+?});?\s*$", script_text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    pass
+
+    # Look for embedded JSON with recipe data
+    for script in soup.find_all("script"):
+        script_text = script.string or ""
+        if "ingredientGroups" in script_text or "recipeIngredient" in script_text:
+            # Try to find JSON object containing recipe
+            try:
+                # Find JSON-like structures
+                for match in re.finditer(r'\{[^{}]*"ingredientGroups"[^{}]*\}', script_text):
+                    data = json.loads(match.group(0))
+                    if "ingredientGroups" in data:
+                        return data
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    return None
+
+
+def _scrape_recipe_fallback(url: str) -> Recipe:
+    """
+    Fallback scraper for websites not supported by recipe-scrapers.
+
+    Uses BeautifulSoup to extract recipe data from HTML.
+    Supports JSON-LD, microdata, and common HTML patterns.
+    """
+    if not WEB_SCRAPING_AVAILABLE:
+        raise ImportError(
+            "httpx and beautifulsoup4 are required for fallback scraping. "
+            "Install with: pip install httpx beautifulsoup4"
+        )
+
+    # Fetch the page
+    response = httpx.get(url, follow_redirects=True, timeout=30.0)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    # Try to extract from JSON-LD first (most reliable)
+    json_ld = _extract_json_ld_recipe(soup)
+    if json_ld:
+        title = json_ld.get("name", "Unknown Recipe")
+
+        # Parse servings
+        servings = None
+        recipe_yield = json_ld.get("recipeYield")
+        if recipe_yield:
+            if isinstance(recipe_yield, list):
+                recipe_yield = recipe_yield[0]
+            match = re.search(r"(\d+)", str(recipe_yield))
+            if match:
+                servings = int(match.group(1))
+
+        # Parse ingredients
+        raw_ingredients = json_ld.get("recipeIngredient", [])
+        if isinstance(raw_ingredients, str):
+            raw_ingredients = [raw_ingredients]
+
+        ingredients = [parse_ingredient_text(ing) for ing in raw_ingredients]
+
+        return Recipe(title=title, ingredients=ingredients, servings=servings, source_url=url)
+
+    # Extract title - try various common patterns
+    title = None
+    for selector in ["h1", ".recipe-title", ".entry-title", "[itemprop='name']"]:
+        elem = soup.select_one(selector)
+        if elem and elem.get_text(strip=True):
+            title = elem.get_text(strip=True)
+            break
+    if not title:
+        title = "Unknown Recipe"
+
+    # Extract servings
+    servings = None
+    for selector in [
+        "[itemprop='recipeYield']",
+        ".servings",
+        ".yield",
+        ".recipe-servings",
+    ]:
+        elem = soup.select_one(selector)
+        if elem:
+            text = elem.get_text(strip=True)
+            match = re.search(r"(\d+)", text)
+            if match:
+                servings = int(match.group(1))
+                break
+
+    # Also try to find servings in text patterns
+    if not servings:
+        for text in soup.stripped_strings:
+            if any(word in text.lower() for word in ["personer", "servings", "portioner"]):
+                match = re.search(r"(\d+)", text)
+                if match:
+                    servings = int(match.group(1))
+                    break
+
+    # Extract ingredients - try various common patterns
+    raw_ingredients: list[str] = []
+
+    # Method 1: Schema.org markup (microdata)
+    for elem in soup.select("[itemprop='recipeIngredient'], [itemprop='ingredients']"):
+        text = elem.get_text(strip=True)
+        if text:
+            raw_ingredients.append(text)
+
+    # Method 2: Common ingredient list classes
+    if not raw_ingredients:
+        for selector in [
+            ".ingredients li",
+            ".recipe-ingredients li",
+            ".ingredient-list li",
+            ".wprm-recipe-ingredient",
+            "[class*='ingredient'] li",
+        ]:
+            elems = soup.select(selector)
+            if elems:
+                for elem in elems:
+                    text = elem.get_text(strip=True)
+                    if text and len(text) > 2:
+                        raw_ingredients.append(text)
+                break
+
+    # Method 3: Look for lists after "Ingredienser" heading
+    if not raw_ingredients:
+        for heading in soup.find_all(["h2", "h3", "h4", "strong"]):
+            heading_text = heading.get_text(strip=True).lower()
+            if "ingrediens" in heading_text or "ingredient" in heading_text:
+                # Find the next list
+                next_elem = heading.find_next(["ul", "ol"])
+                if next_elem:
+                    for li in next_elem.find_all("li"):
+                        text = li.get_text(strip=True)
+                        if text:
+                            raw_ingredients.append(text)
+                break
+
+    # Filter out section headers and recipe names
+    filtered_ingredients = []
+    skip_patterns = ["tilbehør", "dressing", "sauce", "marinade", "topping"]
+    for ing in raw_ingredients:
+        ing_lower = ing.lower().strip()
+        # Skip if it looks like a section header (single word, no numbers)
+        if not any(c.isdigit() for c in ing) and ing_lower in skip_patterns:
+            continue
+        # Skip if it's the recipe title
+        if title and ing_lower == title.lower():
+            continue
+        filtered_ingredients.append(ing)
+
+    # Parse ingredients
+    ingredients = [parse_ingredient_text(ing) for ing in filtered_ingredients]
+
+    return Recipe(title=title, ingredients=ingredients, servings=servings, source_url=url)
+
+
 def parse_recipe_url(url: str) -> Recipe:
     """
     Parse a recipe from a URL using recipe-scrapers.
+
+    Falls back to custom scraping for unsupported websites.
 
     Args:
         url: URL to a recipe page
@@ -376,25 +583,32 @@ def parse_recipe_url(url: str) -> Recipe:
             "Install with: pip install recipe-scrapers"
         )
 
-    scraper = scrape_me(url)
-
-    # Parse ingredients
-    raw_ingredients = scraper.ingredients()
-    ingredients = [parse_ingredient_text(ing) for ing in raw_ingredients]
-
-    # Parse servings
-    servings = None
     try:
-        servings_str = scraper.yields()
-        if servings_str:
-            # Extract number from string like "4 servings"
-            match = re.search(r"(\d+)", servings_str)
-            if match:
-                servings = int(match.group(1))
-    except Exception:
-        pass
+        scraper = scrape_me(url)
 
-    return Recipe(title=scraper.title(), ingredients=ingredients, servings=servings, source_url=url)
+        # Parse ingredients
+        raw_ingredients = scraper.ingredients()
+        ingredients = [parse_ingredient_text(ing) for ing in raw_ingredients]
+
+        # Parse servings
+        servings = None
+        try:
+            servings_str = scraper.yields()
+            if servings_str:
+                # Extract number from string like "4 servings"
+                match = re.search(r"(\d+)", servings_str)
+                if match:
+                    servings = int(match.group(1))
+        except Exception:
+            pass
+
+        return Recipe(
+            title=scraper.title(), ingredients=ingredients, servings=servings, source_url=url
+        )
+
+    except WebsiteNotImplementedError:
+        # Fall back to custom scraping for unsupported sites
+        return _scrape_recipe_fallback(url)
 
 
 def parse_recipe_text(title: str, ingredients_text: str, servings: int | None = None) -> Recipe:
