@@ -14,6 +14,7 @@ CONFIG_DIR = Path.home() / f".{APP_NAME}"
 FAVORITES_FILE = CONFIG_DIR / "favorites.json"
 CREDENTIALS_FILE = CONFIG_DIR / "credentials.json"
 PREFERENCES_FILE = CONFIG_DIR / "preferences.json"
+PANTRY_FILE = CONFIG_DIR / "pantry.json"
 
 # Ensure config directory exists
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)

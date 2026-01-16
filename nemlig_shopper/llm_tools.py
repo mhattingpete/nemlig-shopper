@@ -25,11 +25,24 @@ Example LLM workflow:
 from typing import Any
 
 from .api import NemligAPI, NemligAPIError
+from .config import PANTRY_FILE
 from .export import export_shopping_list as _export_shopping_list
 from .matcher import (
     ProductMatch,
     match_ingredient,
     translate_ingredient,
+)
+from .pantry import (
+    DEFAULT_PANTRY_ITEMS,
+    add_to_pantry,
+    load_pantry_config,
+    remove_from_pantry,
+)
+from .pantry import (
+    filter_pantry_items as _filter_pantry_items,
+)
+from .pantry import (
+    identify_pantry_items as _identify_pantry_items,
 )
 from .planner import (
     ConsolidatedIngredient,
@@ -1431,6 +1444,157 @@ def find_earliest_slot() -> dict[str, Any]:
             "time_range": None,
             "error": str(e),
         }
+
+
+# =============================================================================
+# PANTRY TOOLS
+# =============================================================================
+
+
+def identify_pantry_items(consolidated: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Identify common pantry items from a consolidated ingredient list.
+
+    Pantry items are common household staples like salt, pepper, olive oil,
+    and sugar that users typically already have at home.
+
+    Args:
+        consolidated: List of consolidated ingredient dicts from consolidate_shopping_list()
+            Each dict should have: name, quantity, unit, sources
+
+    Returns:
+        {
+            "pantry_candidates": [
+                {"name": str, "quantity": float | None, "unit": str | None, "sources": [...]}
+            ],
+            "other_ingredients": [
+                {"name": str, "quantity": float | None, "unit": str | None, "sources": [...]}
+            ],
+            "total_candidates": int,
+            "total_other": int
+        }
+    """
+    # Convert dicts to ConsolidatedIngredient objects
+    ingredients = [
+        ConsolidatedIngredient(
+            name=c.get("name", ""),
+            total_quantity=c.get("quantity"),
+            unit=c.get("unit"),
+            sources=c.get("sources", []),
+        )
+        for c in consolidated
+    ]
+
+    # Load user's pantry config
+    config = load_pantry_config(PANTRY_FILE)
+
+    # Identify pantry items
+    pantry, other = _identify_pantry_items(ingredients, config)
+
+    return {
+        "pantry_candidates": [_consolidated_to_dict(c) for c in pantry],
+        "other_ingredients": [_consolidated_to_dict(c) for c in other],
+        "total_candidates": len(pantry),
+        "total_other": len(other),
+    }
+
+
+def exclude_pantry_items(
+    consolidated: list[dict[str, Any]],
+    items_to_exclude: list[str],
+) -> list[dict[str, Any]]:
+    """
+    Remove specified pantry items from the shopping list.
+
+    Args:
+        consolidated: List of consolidated ingredient dicts
+        items_to_exclude: Names of items to exclude (case-insensitive)
+
+    Returns:
+        Filtered list of consolidated ingredients (same format as input)
+    """
+    # Convert dicts to ConsolidatedIngredient objects
+    ingredients = [
+        ConsolidatedIngredient(
+            name=c.get("name", ""),
+            total_quantity=c.get("quantity"),
+            unit=c.get("unit"),
+            sources=c.get("sources", []),
+        )
+        for c in consolidated
+    ]
+
+    # Filter out excluded items
+    filtered = _filter_pantry_items(ingredients, items_to_exclude)
+
+    # Convert back to dicts
+    return [_consolidated_to_dict(c) for c in filtered]
+
+
+def get_user_pantry() -> dict[str, Any]:
+    """
+    Get the user's saved pantry configuration.
+
+    Returns:
+        {
+            "user_items": [str],  # Custom items added by user
+            "excluded_defaults": [str],  # Default items user has excluded
+            "all_active_items": [str],  # All currently active pantry items
+            "default_count": int,
+            "user_count": int,
+            "total_active": int
+        }
+    """
+    config = load_pantry_config(PANTRY_FILE)
+    all_active = config.all_pantry_items
+
+    return {
+        "user_items": sorted(config.user_items),
+        "excluded_defaults": sorted(config.excluded_defaults),
+        "all_active_items": sorted(all_active),
+        "default_count": len(DEFAULT_PANTRY_ITEMS),
+        "user_count": len(config.user_items),
+        "total_active": len(all_active),
+    }
+
+
+def update_user_pantry(
+    add_items: list[str] | None = None,
+    remove_items: list[str] | None = None,
+) -> dict[str, Any]:
+    """
+    Update the user's pantry configuration.
+
+    Args:
+        add_items: Items to add to the pantry
+        remove_items: Items to remove from the pantry
+
+    Returns:
+        Updated pantry configuration (same format as get_user_pantry())
+    """
+    if add_items:
+        add_to_pantry(add_items, PANTRY_FILE)
+
+    if remove_items:
+        remove_from_pantry(remove_items, PANTRY_FILE)
+
+    return get_user_pantry()
+
+
+def get_default_pantry_items() -> dict[str, Any]:
+    """
+    Get the list of default pantry items.
+
+    Returns:
+        {
+            "items": [str],  # Sorted list of default pantry items
+            "count": int
+        }
+    """
+    return {
+        "items": sorted(DEFAULT_PANTRY_ITEMS),
+        "count": len(DEFAULT_PANTRY_ITEMS),
+    }
 
 
 # =============================================================================
