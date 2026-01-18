@@ -6,7 +6,7 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [
-    { name = "Your Name", email = "your.email@example.com" }
+    { name = "mhattingpete" }
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -35,8 +35,9 @@ dependencies = [
 nemlig = "nemlig_shopper.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/nemlig-shopper"
-Repository = "https://github.com/yourusername/nemlig-shopper"
+Homepage = "https://github.com/mhattingpete/nemlig-shopper"
+Repository = "https://github.com/mhattingpete/nemlig-shopper"
+Issues = "https://github.com/mhattingpete/nemlig-shopper/issues"
 
 [build-system]
 requires = ["hatchling"]
