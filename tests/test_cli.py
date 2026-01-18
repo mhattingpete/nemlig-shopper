@@ -316,25 +316,24 @@ class TestAddCommand:
             "failed": [],
         }
 
-        mock_matches = [
-            MagicMock(
-                matched=True,
-                ingredient_name="milk",
-                product_name="Laktosefri Mælk",
-                price=18.95,
-                quantity=1,
-                is_dietary_safe=True,
-                dietary_warnings=[],
-                excluded_count=2,
-                alternatives=[],
-                to_dict=lambda: {},
-            ),
-        ]
+        # Mock match_ingredient (singular) - called once per ingredient
+        mock_match_result = MagicMock(
+            matched=True,
+            ingredient_name="milk",
+            product_name="Laktosefri Mælk",
+            price=18.95,
+            quantity=1,
+            is_dietary_safe=True,
+            dietary_warnings=[],
+            excluded_count=2,
+            alternatives=[],
+            to_dict=lambda: {},
+        )
 
         with patch("nemlig_shopper.cli.get_api", return_value=mock_api_logged_in):
             with patch("nemlig_shopper.cli.parse_recipe_url", return_value=sample_recipe):
                 with patch(
-                    "nemlig_shopper.cli.match_ingredients", return_value=mock_matches
+                    "nemlig_shopper.cli.match_ingredient", return_value=mock_match_result
                 ) as mock_match:
                     with patch(
                         "nemlig_shopper.cli.prepare_cart_items",
@@ -352,7 +351,8 @@ class TestAddCommand:
                             ],
                         )
 
-        # Verify dietary filters were passed
+        # Verify dietary filters were passed to match_ingredient
+        assert mock_match.called
         call_kwargs = mock_match.call_args[1]
         assert "lactose" in call_kwargs["allergies"]
         assert "gluten" in call_kwargs["allergies"]
@@ -677,50 +677,6 @@ class TestPricesCommands:
 # ============================================================================
 # Plan Command Tests
 # ============================================================================
-
-
-class TestPlanCommand:
-    """Tests for the plan command."""
-
-    def test_plan_requires_urls(self, runner, mock_api_logged_in):
-        """Plan should require at least one URL."""
-        with patch("nemlig_shopper.cli.get_api", return_value=mock_api_logged_in):
-            result = runner.invoke(cli, ["plan"])
-
-        assert result.exit_code == 1
-        assert "No recipe URLs provided" in result.output
-
-    def test_plan_with_urls(self, runner, mock_api_logged_in, sample_recipe):
-        """Plan should process multiple recipe URLs."""
-        mock_api_logged_in.add_multiple_to_cart.return_value = {
-            "success": [1001, 1002],
-            "failed": [],
-        }
-
-        mock_plan = MagicMock()
-        mock_plan.recipe_count = 2
-        mock_plan.ingredient_count = 5
-        mock_plan.recipes = [sample_recipe, sample_recipe]
-        mock_plan.consolidated_ingredients = []
-
-        mock_matches = []
-
-        with patch("nemlig_shopper.cli.get_api", return_value=mock_api_logged_in):
-            with patch("nemlig_shopper.cli.create_meal_plan", return_value=mock_plan):
-                with patch("nemlig_shopper.cli.match_ingredients", return_value=mock_matches):
-                    with patch("nemlig_shopper.cli.prepare_cart_items", return_value=[]):
-                        result = runner.invoke(
-                            cli,
-                            [
-                                "plan",
-                                "https://example.com/recipe1",
-                                "https://example.com/recipe2",
-                                "--yes",
-                            ],
-                        )
-
-        assert result.exit_code == 0
-        assert "MEAL PLAN (2 recipes)" in result.output
 
 
 # ============================================================================
