@@ -35,8 +35,8 @@ uv run nemlig login
 # 2. Add a recipe to cart
 uv run nemlig add https://www.valdemarsro.dk/pasta-carbonara/
 
-# 3. Or meal plan multiple recipes
-uv run nemlig plan URL1 URL2 URL3
+# 3. Add multiple recipes (ingredients are consolidated)
+uv run nemlig add URL1 URL2 URL3
 ```
 
 See [QUICKSTART.md](QUICKSTART.md) for more examples.
@@ -46,9 +46,7 @@ See [QUICKSTART.md](QUICKSTART.md) for more examples.
 | Command | Description |
 |---------|-------------|
 | `nemlig login` | Authenticate with Nemlig.com |
-| `nemlig add URL` | Parse recipe and add to cart |
-| `nemlig plan URL...` | Multi-recipe meal planning with consolidation |
-| `nemlig shop` | Interactive mode for mixed URLs and manual items |
+| `nemlig add` | Parse recipes/items and add to cart |
 | `nemlig parse URL` | Parse recipe without adding to cart |
 | `nemlig search QUERY` | Search Nemlig products |
 | `nemlig favorites` | Manage saved recipes |
@@ -78,27 +76,28 @@ uv run nemlig add https://example.com/recipe --dry-run
 uv run nemlig add https://example.com/recipe --skip-pantry-check
 ```
 
-### Meal Planning
+### Multiple Recipes
 
 ```bash
-# Combine multiple recipes (consolidates ingredients)
-uv run nemlig plan \
+# Combine multiple recipes (ingredients consolidated)
+uv run nemlig add \
   https://www.valdemarsro.dk/pasta-carbonara/ \
-  https://www.valdemarsro.dk/lasagne/ \
-  https://www.valdemarsro.dk/tiramisu/
+  https://www.valdemarsro.dk/lasagne/
 ```
 
-### Quick Shopping
+### Manual Items
 
 ```bash
-# Interactive mode - paste URLs and manual items
-uv run nemlig shop
-# Then enter:
-#   https://recipe-site.com/recipe
-#   mælk
-#   æg x6
-#   ost 200g
-# Press Ctrl+D when done
+# Add manual items
+uv run nemlig add --text "mælk, brød, æg"
+
+# Mixed: recipe URL + manual items
+uv run nemlig add --text "https://recipe.com/pasta
+mælk
+æg x6"
+
+# From file
+uv run nemlig add --file shopping-list.txt
 ```
 
 ### Pantry Management

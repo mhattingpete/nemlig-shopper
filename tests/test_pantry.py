@@ -41,7 +41,7 @@ def sample_ingredients() -> list[ConsolidatedIngredient]:
             name="tomatoes", total_quantity=4.0, unit="stk", sources=["Recipe 1"]
         ),
         ConsolidatedIngredient(name="pepper", total_quantity=0.5, unit="tsp", sources=["Recipe 1"]),
-        ConsolidatedIngredient(name="sugar", total_quantity=100.0, unit="g", sources=["Recipe 2"]),
+        ConsolidatedIngredient(name="water", total_quantity=500.0, unit="ml", sources=["Recipe 2"]),
     ]
 
 
@@ -79,7 +79,7 @@ class TestPantryConfig:
         items = config.all_pantry_items
         assert "salt" not in items
         assert "pepper" not in items
-        assert "sugar" in items  # Other defaults still there
+        assert "olive oil" in items  # Other defaults still there
 
     def test_to_dict_and_from_dict_roundtrip(self):
         """Config should survive serialization roundtrip."""
@@ -149,17 +149,17 @@ class TestIdentifyPantryItems:
         assert "olive oil" in pantry_names
 
     def test_identifies_danish_terms(self):
-        """Danish pantry items like 'smør' should be identified."""
+        """Danish pantry items like 'olie' should be identified."""
         ingredients = [
-            ConsolidatedIngredient(name="smør", total_quantity=50.0, unit="g", sources=["Test"]),
             ConsolidatedIngredient(
-                name="hvedemel", total_quantity=200.0, unit="g", sources=["Test"]
+                name="olivenolie", total_quantity=50.0, unit="ml", sources=["Test"]
             ),
+            ConsolidatedIngredient(name="peber", total_quantity=1.0, unit="tsp", sources=["Test"]),
         ]
         pantry, other = identify_pantry_items(ingredients)
         pantry_names = {p.name for p in pantry}
-        assert "smør" in pantry_names
-        assert "hvedemel" in pantry_names
+        assert "olivenolie" in pantry_names
+        assert "peber" in pantry_names
 
     def test_fresh_produce_not_pantry(self, sample_ingredients):
         """Fresh items like tomatoes should not be pantry items."""
@@ -172,7 +172,7 @@ class TestIdentifyPantryItems:
         """Should correctly split into pantry and other categories."""
         pantry, other = identify_pantry_items(sample_ingredients)
 
-        # Pantry: salt, olive oil, pepper, sugar
+        # Pantry: salt, olive oil, pepper, water
         assert len(pantry) == 4
 
         # Other: chicken breast, tomatoes
@@ -291,24 +291,22 @@ class TestDefaultItems:
         assert items == sorted(items)
 
     def test_includes_common_items(self):
-        """Default list should include common pantry staples."""
+        """Default list should include basic pantry staples."""
         items = set(get_default_pantry_items())
         # English
         assert "salt" in items
         assert "pepper" in items
-        assert "sugar" in items
         assert "olive oil" in items
-        assert "butter" in items
+        assert "water" in items
         # Danish
-        assert "smør" in items
         assert "peber" in items
-        assert "sukker" in items
+        assert "vand" in items
 
-    def test_not_too_large(self):
-        """Default list should be reasonable size."""
+    def test_minimal_size(self):
+        """Default list should be minimal (user adds more if needed)."""
         items = get_default_pantry_items()
-        # Should have common items but not be excessive
-        assert 50 <= len(items) <= 150
+        # Minimal set: water, oil, salt, pepper (both languages)
+        assert 5 <= len(items) <= 20
 
 
 # =============================================================================

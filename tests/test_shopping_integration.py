@@ -48,25 +48,17 @@ EXPECTED_PRODUCTS = {
     "frugt": ["Kiwi røde", "Pære Doyenne stor", "Pære Conference"],
 }
 
-# Items that should be filtered by pantry check
+# Items that should be filtered by pantry check (minimal set)
 EXPECTED_PANTRY_ITEMS = [
     "olivenolie",
     "olive oil",
+    "olie",
+    "oil",
     "salt",
     "pepper",
-    "sukker",
-    "sugar",
-    "karry",
-    "curry powder",
-    "paprika",
-    "spidskommen",
-    "cumin",
-    "bouillon",
-    "ris",
-    "rice",
-    "pasta",
-    "mel",
-    "flour",
+    "peber",
+    "water",
+    "vand",
 ]
 
 # Fresh produce that should NEVER be pantry-filtered
@@ -99,8 +91,8 @@ class TestPantryFiltering:
     """Tests for pantry item filtering."""
 
     def test_default_pantry_items_exist(self):
-        """Default pantry items should be defined."""
-        assert len(DEFAULT_PANTRY_ITEMS) > 50
+        """Default pantry items should be defined (minimal set)."""
+        assert 5 <= len(DEFAULT_PANTRY_ITEMS) <= 20
         assert "salt" in DEFAULT_PANTRY_ITEMS
         assert "olive oil" in DEFAULT_PANTRY_ITEMS
         assert "olivenolie" in DEFAULT_PANTRY_ITEMS
@@ -244,21 +236,16 @@ class TestInvoiceComparison:
 class TestPantryFilteringSavings:
     """Tests for pantry filtering cost savings."""
 
-    # Items filtered in testing
+    # Items filtered in testing (minimal pantry = oil, salt, pepper, water)
     FILTERED_ITEMS = [
         ("olivenolie", 183.48),
-        ("karry", 10.0),
-        ("paprika", 5.95),
-        ("spidskommen", 18.30),
-        ("hønsebouillon", 4.98),
-        ("ris", 30.04),  # Would have matched pasta
-        ("mayonnaise", 18.01),
     ]
 
     def test_pantry_filter_saves_money(self):
-        """Filtering pantry items should save significant money."""
+        """Filtering pantry items should save money (even with minimal pantry)."""
         total_saved = sum(price for _, price in self.FILTERED_ITEMS)
-        assert total_saved > 100, f"Pantry filter should save >100 DKK, saved {total_saved}"
+        # With minimal pantry, savings are lower but still meaningful
+        assert total_saved > 50, f"Pantry filter should save >50 DKK, saved {total_saved}"
 
     def test_filtered_items_are_staples(self):
         """Filtered items should be common household staples."""

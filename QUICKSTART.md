@@ -4,7 +4,7 @@
 
 ```bash
 # Install
-git clone https://github.com/yourusername/nemlig-shopper.git
+git clone https://github.com/mhattingpete/nemlig-shopper.git
 cd nemlig-shopper
 uv sync
 
@@ -38,32 +38,31 @@ This will:
 --dry-run           # Don't add to cart (preview only)
 ```
 
-### 2. Meal plan multiple recipes
+### 2. Multiple recipes (ingredients consolidated)
 
 ```bash
-uv run nemlig plan \
+uv run nemlig add \
   https://www.valdemarsro.dk/pasta-carbonara/ \
   https://www.valdemarsro.dk/lasagne/
 ```
 
-Consolidates ingredients across recipes (e.g., if both need onions, you get the combined amount).
+If both need onions, you get the combined amount in one cart item.
 
-### 3. Quick shopping with mixed input
+### 3. Manual items or mixed input
 
 ```bash
-uv run nemlig shop
-```
+# Just manual items
+uv run nemlig add --text "mælk, brød, æg x6"
 
-Then paste a mix of:
-```
-https://www.valdemarsro.dk/one-pot-pasta/
+# Mix of URLs and items
+uv run nemlig add --text "https://www.valdemarsro.dk/one-pot-pasta/
 mælk
 æg x6
-ost 200g
-https://www.valdemarsro.dk/pandekager/
-```
+ost 200g"
 
-Press Ctrl+D when done. Handles both URLs and manual items.
+# From a file
+uv run nemlig add --file shopping-list.txt
+```
 
 ### 4. Dietary filters
 
