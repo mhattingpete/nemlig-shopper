@@ -5,120 +5,135 @@ A CLI tool that parses recipes from URLs or text, matches ingredients to product
 ## Features
 
 - **Recipe Parsing**: Extract ingredients from recipe URLs (supports 100+ recipe sites) or manual text input
-- **Product Matching**: Automatically match ingredients to Nemlig.com products
+- **Product Matching**: Automatically match ingredients to Nemlig.com products with smart scoring
 - **Recipe Scaling**: Double, halve, or scale recipes to any serving size
+- **Meal Planning**: Combine multiple recipes with ingredient consolidation
+- **Pantry Check**: Identifies common household items (salt, oil, etc.) so you don't buy what you have
+- **Dietary Filters**: Filter for lactose-free, gluten-free, or vegan products
+- **Interactive Review**: TUI for reviewing and swapping product matches before checkout
+- **Price Tracking**: SQLite-backed price history
 - **Favorites**: Save recipes locally for quick re-ordering
-- **Cart Integration**: Add matched products directly to your Nemlig.com cart
+- **Export**: Shopping lists to JSON, Markdown, or PDF
 
 ## Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/nemlig-shopper.git
+git clone https://github.com/mhattingpete/nemlig-shopper.git
 cd nemlig-shopper
 
 # Install with uv (recommended)
 uv sync
-
-# Or install as a package
-uv pip install -e .
 ```
 
 ## Quick Start
 
 ```bash
 # 1. Log in to Nemlig.com
-nemlig login
+uv run nemlig login
 
-# 2. Parse a recipe and add to cart
-nemlig add https://www.example.com/recipe/chocolate-cake
+# 2. Add a recipe to cart
+uv run nemlig add https://www.valdemarsro.dk/pasta-carbonara/
 
-# 3. Or parse first, then decide
-nemlig parse https://www.example.com/recipe/chocolate-cake
+# 3. Or meal plan multiple recipes
+uv run nemlig plan URL1 URL2 URL3
 ```
 
-## Usage
+See [QUICKSTART.md](QUICKSTART.md) for more examples.
 
-### Authentication
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `nemlig login` | Authenticate with Nemlig.com |
+| `nemlig add URL` | Parse recipe and add to cart |
+| `nemlig plan URL...` | Multi-recipe meal planning with consolidation |
+| `nemlig shop` | Interactive mode for mixed URLs and manual items |
+| `nemlig parse URL` | Parse recipe without adding to cart |
+| `nemlig search QUERY` | Search Nemlig products |
+| `nemlig favorites` | Manage saved recipes |
+| `nemlig pantry` | Manage household pantry items |
+
+## Usage Examples
+
+### Adding Recipes
 
 ```bash
-# Log in (credentials saved locally)
-nemlig login
+# Basic usage
+uv run nemlig add https://example.com/recipe
 
-# Log in without saving credentials
-nemlig login --no-save
+# Scale to double
+uv run nemlig add https://example.com/recipe --scale 2
 
-# Clear saved credentials
-nemlig logout
+# Scale to 8 servings
+uv run nemlig add https://example.com/recipe --servings 8
+
+# With dietary filter
+uv run nemlig add https://example.com/recipe --lactose-free
+
+# Preview without adding to cart
+uv run nemlig add https://example.com/recipe --dry-run
+
+# Skip pantry check
+uv run nemlig add https://example.com/recipe --skip-pantry-check
 ```
 
-### Parsing Recipes
+### Meal Planning
 
 ```bash
-# Parse from URL
-nemlig parse https://www.allrecipes.com/recipe/12345
-
-# Parse with scaling (double the recipe)
-nemlig parse https://example.com/recipe --scale 2
-
-# Parse and scale to 8 servings
-nemlig parse https://example.com/recipe --servings 8
-
-# Parse from text input
-nemlig parse-text --title "My Recipe"
-# Then enter ingredients one per line, empty line to finish
+# Combine multiple recipes (consolidates ingredients)
+uv run nemlig plan \
+  https://www.valdemarsro.dk/pasta-carbonara/ \
+  https://www.valdemarsro.dk/lasagne/ \
+  https://www.valdemarsro.dk/tiramisu/
 ```
 
-### Adding to Cart
+### Quick Shopping
 
 ```bash
-# Parse and add to cart
-nemlig add https://example.com/recipe
-
-# Add with scaling
-nemlig add https://example.com/recipe --scale 2
-
-# Skip confirmation
-nemlig add https://example.com/recipe --yes
-
-# Add and save as favorite
-nemlig add https://example.com/recipe --save-as "weekly-pasta"
+# Interactive mode - paste URLs and manual items
+uv run nemlig shop
+# Then enter:
+#   https://recipe-site.com/recipe
+#   mælk
+#   æg x6
+#   ost 200g
+# Press Ctrl+D when done
 ```
 
-### Searching Products
+### Pantry Management
 
 ```bash
-# Search for a product
-nemlig search "mælk"
+# List your pantry items
+uv run nemlig pantry list
 
-# Limit results
-nemlig search "ost" --limit 10
+# Add items you always have
+uv run nemlig pantry add "fish sauce" "sesame oil"
+
+# Remove items (so they're included in shopping)
+uv run nemlig pantry remove "eggs"
+
+# Show default pantry items
+uv run nemlig pantry defaults
+
+# Reset to defaults
+uv run nemlig pantry clear
 ```
 
-### Managing Favorites
+### Favorites
 
 ```bash
-# List all favorites
-nemlig favorites list
+# List saved favorites
+uv run nemlig favorites list
 
-# Save a recipe as favorite
-nemlig favorites save "sunday-roast" https://example.com/roast-recipe
+# Save a recipe
+uv run nemlig add URL --save-as "sunday-dinner"
 
-# Show favorite details
-nemlig favorites show "sunday-roast"
+# Quick re-order
+uv run nemlig favorites order "sunday-dinner"
 
-# Quick re-order a favorite
-nemlig favorites order "sunday-roast"
-
-# Order with scaling
-nemlig favorites order "sunday-roast" --scale 2
-nemlig favorites order "sunday-roast" --servings 6
-
-# Re-match products (if prices/availability changed)
-nemlig favorites update "sunday-roast"
-
-# Delete a favorite
-nemlig favorites delete "sunday-roast"
+# Re-order with scaling
+uv run nemlig favorites order "sunday-dinner" --scale 2
 ```
 
 ## Configuration
@@ -131,73 +146,44 @@ Credentials can be provided via:
    NEMLIG_PASSWORD=your-password
    ```
 
-2. **Saved credentials**: Run `nemlig login` to save credentials locally
+2. **Saved credentials**: Run `uv run nemlig login` to save credentials locally
 
 Configuration files are stored in `~/.nemlig-shopper/`:
-- `credentials.json` - Saved login credentials (chmod 600)
-- `favorites.json` - Saved favorite recipes
-
-## Scaling Examples
-
-```bash
-# Double a recipe
-nemlig add https://example.com/recipe --scale 2
-
-# Halve a recipe
-nemlig add https://example.com/recipe --scale 0.5
-
-# Scale to specific servings (if recipe has serving info)
-nemlig add https://example.com/recipe --servings 8
-
-# Scale a favorite
-nemlig favorites order "pasta" --scale 3
-```
+- `credentials.json` - Login credentials (chmod 600)
+- `favorites.json` - Saved recipes
+- `pantry.json` - Custom pantry items
+- `prices.db` - Price history (SQLite)
 
 ## Supported Recipe Sites
 
-This tool uses [recipe-scrapers](https://github.com/hhursev/recipe-scrapers) which supports 100+ recipe websites including:
+Uses [recipe-scrapers](https://github.com/hhursev/recipe-scrapers) supporting 100+ sites:
 
+- Valdemarsro (Danish)
 - AllRecipes
 - BBC Good Food
 - Bon Appétit
-- Epicurious
-- Food Network
 - Serious Eats
 - And many more...
-
-## Project Structure
-
-```
-nemlig_shopper/
-├── __init__.py      # Package exports
-├── api.py           # Nemlig.com API client
-├── cli.py           # CLI commands
-├── config.py        # Configuration management
-├── favorites.py     # Favorites storage
-├── matcher.py       # Ingredient-to-product matching
-├── recipe_parser.py # Recipe parsing
-└── scaler.py        # Recipe scaling logic
-```
 
 ## Development
 
 ```bash
-# Sync dependencies with uv
+# Install dependencies
 uv sync
 
-# Run the CLI
-uv run nemlig --help
+# Run tests
+uv run pytest
 
-# Or run directly
-uv run python -m nemlig_shopper.cli --help
+# Run a specific test
+uv run pytest tests/test_recipe_parser.py -v
 ```
 
 ## Notes
 
-- This tool uses an unofficial Nemlig.com API discovered through network inspection
-- Product matching is based on search results and may not always be perfect
-- Prices shown are estimates and may differ from actual cart totals
-- Danish and English ingredient names are supported
+- Uses an unofficial Nemlig.com API (discovered via network inspection)
+- Product matching uses smart scoring but may occasionally need manual adjustment
+- Danish ingredient names match better than English
+- Prices are estimates; actual cart totals may differ slightly
 
 ## License
 
