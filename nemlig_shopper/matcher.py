@@ -11,6 +11,34 @@ from .preference_engine import (
 from .preferences import is_preferred_product
 from .scaler import ScaledIngredient, calculate_product_quantity
 
+
+def is_organic_product(product: dict[str, Any]) -> bool:
+    """Check if a product is organic based on name and labels.
+
+    Detects organic products by looking for:
+    - "øko" prefix in product name (Danish organic indicator)
+    - "Økologisk" in the product's labels array
+
+    Args:
+        product: Product dict from API
+
+    Returns:
+        True if product appears to be organic
+    """
+    product_name = (product.get("name") or "").lower()
+    if "øko" in product_name:
+        return True
+
+    labels = product.get("labels", [])
+    if isinstance(labels, list):
+        for label in labels:
+            label_text = label.lower() if isinstance(label, str) else label.get("name", "").lower()
+            if "økologisk" in label_text:
+                return True
+
+    return False
+
+
 # English to Danish translations for common ingredients
 INGREDIENT_TRANSLATIONS: dict[str, str] = {
     # Vegetables
@@ -353,20 +381,8 @@ def score_product_match(
         score += 75
 
     # Organic preference: boost products with organic indicators
-    if prefer_organic:
-        # Check product name for "øko" (Danish organic prefix)
-        if "øko" in product_name:
-            score += 50
-        # Check labels array for "Økologisk"
-        labels = product.get("labels", [])
-        if isinstance(labels, list):
-            for label in labels:
-                if isinstance(label, str) and "økologisk" in label.lower():
-                    score += 50
-                    break
-                elif isinstance(label, dict) and "økologisk" in label.get("name", "").lower():
-                    score += 50
-                    break
+    if prefer_organic and is_organic_product(product):
+        score += 50
 
     # Budget preference: prefer lower unit prices
     if prefer_budget:
@@ -642,14 +658,7 @@ def _apply_smart_organic_preference(
     # Find cheapest conventional product
     cheapest_conventional_price = float("inf")
     for product in products:
-        product_name = (product.get("name") or "").lower()
-        labels = product.get("labels", [])
-        is_organic = "øko" in product_name or any(
-            "økologisk"
-            in (str(label).lower() if isinstance(label, str) else label.get("name", "").lower())
-            for label in (labels if isinstance(labels, list) else [])
-        )
-        if not is_organic:
+        if not is_organic_product(product):
             price = product.get("price") or float("inf")
             if price < cheapest_conventional_price:
                 cheapest_conventional_price = price
@@ -660,15 +669,7 @@ def _apply_smart_organic_preference(
 
     # Add organic preference score
     for product in products:
-        product_name = (product.get("name") or "").lower()
-        labels = product.get("labels", [])
-        is_organic = "øko" in product_name or any(
-            "økologisk"
-            in (str(label).lower() if isinstance(label, str) else label.get("name", "").lower())
-            for label in (labels if isinstance(labels, list) else [])
-        )
-
-        if is_organic:
+        if is_organic_product(product):
             price = product.get("price") or float("inf")
             price_diff = price - cheapest_conventional_price
             if price_diff <= organic_price_threshold:
