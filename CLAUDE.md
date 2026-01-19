@@ -42,7 +42,7 @@ Recipe URL/Text → recipe_parser → Recipe → scaler → ScaledIngredient[] �
 
 ### Core Modules
 
-- **cli.py**: Click-based CLI entry point. Defines all commands (`login`, `parse`, `add`, `search`, `favorites`). Uses a singleton `NemligAPI` instance.
+- **cli.py**: Click-based CLI entry point. Defines all commands (`login`, `parse`, `add`, `search`, `pantry`, `export`). Uses a singleton `NemligAPI` instance.
 
 - **api.py**: HTTP client for Nemlig.com's unofficial API. Handles authentication (JWT tokens), product search via search gateway, and cart operations. Key endpoints:
   - `/webapi/login` - Authentication
@@ -55,17 +55,19 @@ Recipe URL/Text → recipe_parser → Recipe → scaler → ScaledIngredient[] �
 
 - **matcher.py**: Matches ingredients to Nemlig products. Uses English→Danish translation dictionary, smart scoring to prioritize food categories over non-food, and filters out derivative products (e.g., "onion chips" when searching for "onion").
 
-- **favorites.py**: Persists recipes and product matches to `~/.nemlig-shopper/favorites.json`. Enables quick re-ordering without re-matching.
-
 - **config.py**: Manages credentials (env vars or `~/.nemlig-shopper/credentials.json`) and app configuration.
+
+- **pantry.py**: Simple text file (`~/.nemlig-shopper/pantry.txt`) for items user always has at home. One item per line.
+
+- **preference_engine.py**: Dietary/allergy checking for product matches (--lactose-free, --gluten-free, --vegan flags).
 
 ### Key Design Patterns
 
-- **ProductMatch scoring**: The matcher scores products based on category relevance, name matching, and penalizes non-food items and derivative products (chips, sauces, cleaning products).
+- **ProductMatch scoring**: The matcher scores products based on category relevance, name matching, and penalizes non-food items and derivative products. See `is_organic_product()` for organic detection.
 
 - **Lazy API initialization**: Session data (JWT token, timestamps, timeslot) is fetched on-demand and cached for subsequent requests.
 
-- **Recipe serialization**: Recipes use `to_dict()`/`from_dict()` for JSON persistence in favorites.
+- **Simple config files**: Pantry uses plain text (one item per line), credentials use JSON. Edit directly or via CLI commands.
 
 ## Testing
 
@@ -104,3 +106,19 @@ Since these run automatically, there's no need to manually run linting or type c
 - **Never run inline Python scripts** - Always create script files first, then execute them
 - **Debug scripts**: Prefix with `debug_` (e.g., `debug_search.py`) - these are temporary and can be deleted
 - **Production scripts**: Use descriptive names in `/tmp/claude/` for one-off tasks
+
+## Quick Reference
+
+### Adding a new CLI command
+Reference: `cli.py` - follow the pattern of `add_to_cart()` or `export_list()`
+
+### Adding ingredient translations
+Edit `INGREDIENT_TRANSLATIONS` dict in `matcher.py`
+
+### Testing a recipe URL
+```bash
+uv run nemlig parse "https://recipe-url.com" --dry-run
+```
+
+### API changes
+Use Chrome DevTools MCP to capture new endpoints, then update `api.py`
