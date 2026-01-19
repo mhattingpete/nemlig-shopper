@@ -332,7 +332,7 @@ def cart():
         if delivery_time:
             click.echo(f"\nDelivery: {delivery_time}")
         click.echo()
-        click.echo("View online: https://www.nemlig.com/LeveringsInfo")
+        click.echo("View online: https://www.nemlig.com/basket")
 
     except NemligAPIError as e:
         click.echo(f"✗ Failed to get cart: {e}", err=True)
@@ -675,7 +675,7 @@ def add_to_cart(
         if fail_count:
             click.echo(f"✗ Failed to add {fail_count} products")
 
-        click.echo("\nView cart: https://www.nemlig.com/LeveringsInfo")
+        click.echo("\nView cart: https://www.nemlig.com/basket")
 
     except ImportError as e:
         click.echo(f"✗ {e}", err=True)
