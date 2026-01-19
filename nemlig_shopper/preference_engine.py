@@ -420,65 +420,6 @@ def check_dietary_compatibility(
     )
 
 
-def filter_products_by_allergies(
-    products: list[dict[str, Any]],
-    allergens: list[str],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """
-    Filter a list of products, separating safe from unsafe.
-
-    Args:
-        products: List of product dicts
-        allergens: List of allergy types to check
-
-    Returns:
-        Tuple of (safe_products, unsafe_products)
-    """
-    safe = []
-    unsafe = []
-
-    for product in products:
-        result = check_allergy_safety(product, allergens)
-        if result.is_safe:
-            safe.append(product)
-        else:
-            # Annotate product with allergy info for LLM consumption
-            product = product.copy()
-            product["_allergy_warning"] = result.to_dict()
-            unsafe.append(product)
-
-    return safe, unsafe
-
-
-def filter_products_by_dietary(
-    products: list[dict[str, Any]],
-    dietary_restrictions: list[str],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """
-    Filter products by dietary compatibility.
-
-    Args:
-        products: List of product dicts
-        dietary_restrictions: List of dietary types
-
-    Returns:
-        Tuple of (compatible_products, incompatible_products)
-    """
-    compatible = []
-    incompatible = []
-
-    for product in products:
-        result = check_dietary_compatibility(product, dietary_restrictions)
-        if result.is_compatible:
-            compatible.append(product)
-        else:
-            product = product.copy()
-            product["_dietary_warning"] = result.to_dict()
-            incompatible.append(product)
-
-    return compatible, incompatible
-
-
 def get_safe_alternative_query(
     ingredient_name: str,
     allergens: list[str] | None = None,

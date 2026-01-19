@@ -6,8 +6,6 @@ from nemlig_shopper.preference_engine import (
     DIETARY_SAFE_INDICATORS,
     check_allergy_safety,
     check_dietary_compatibility,
-    filter_products_by_allergies,
-    filter_products_by_dietary,
     get_safe_alternative_query,
 )
 
@@ -199,62 +197,6 @@ class TestCheckDietaryCompatibility:
         assert "is_compatible" in result_dict
         assert "conflicts" in result_dict
         assert "warnings" in result_dict
-
-
-class TestFilterProductsByAllergies:
-    """Tests for filter_products_by_allergies function."""
-
-    def test_filter_separates_safe_and_unsafe(self):
-        """Filter should separate products correctly."""
-        products = [
-            {"name": "Æbler", "id": 1},
-            {"name": "Mælk", "id": 2},
-            {"name": "Bananer", "id": 3},
-        ]
-        safe, unsafe = filter_products_by_allergies(products, ["dairy"])
-
-        assert len(safe) == 2
-        assert len(unsafe) == 1
-        assert any(p["name"] == "Mælk" for p in unsafe)
-
-    def test_filter_annotates_unsafe_products(self):
-        """Unsafe products should have warning annotation."""
-        products = [{"name": "Nøddemix", "id": 1}]
-        safe, unsafe = filter_products_by_allergies(products, ["nuts"])
-
-        assert len(unsafe) == 1
-        assert "_allergy_warning" in unsafe[0]
-
-    def test_empty_list_returns_empty(self):
-        """Empty product list should return empty results."""
-        safe, unsafe = filter_products_by_allergies([], ["nuts"])
-
-        assert safe == []
-        assert unsafe == []
-
-
-class TestFilterProductsByDietary:
-    """Tests for filter_products_by_dietary function."""
-
-    def test_filter_separates_compatible_and_incompatible(self):
-        """Filter should separate products correctly."""
-        products = [
-            {"name": "Gulerødder", "id": 1},
-            {"name": "Kylling", "id": 2},
-            {"name": "Kartofler", "id": 3},
-        ]
-        compatible, incompatible = filter_products_by_dietary(products, ["vegetarian"])
-
-        assert len(compatible) == 2
-        assert len(incompatible) == 1
-
-    def test_filter_annotates_incompatible_products(self):
-        """Incompatible products should have warning annotation."""
-        products = [{"name": "Bacon", "id": 1}]
-        compatible, incompatible = filter_products_by_dietary(products, ["vegetarian"])
-
-        assert len(incompatible) == 1
-        assert "_dietary_warning" in incompatible[0]
 
 
 class TestGetSafeAlternativeQuery:
