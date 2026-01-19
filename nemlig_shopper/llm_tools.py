@@ -35,7 +35,7 @@ from .matcher import (
 from .pantry import (
     DEFAULT_PANTRY_ITEMS,
     add_to_pantry,
-    load_pantry_config,
+    load_pantry,
     remove_from_pantry,
 )
 from .pantry import (
@@ -1485,11 +1485,11 @@ def identify_pantry_items(consolidated: list[dict[str, Any]]) -> dict[str, Any]:
         for c in consolidated
     ]
 
-    # Load user's pantry config
-    config = load_pantry_config(PANTRY_FILE)
+    # Load user's pantry items
+    pantry_items = load_pantry(PANTRY_FILE)
 
     # Identify pantry items
-    pantry, other = _identify_pantry_items(ingredients, config)
+    pantry, other = _identify_pantry_items(ingredients, pantry_items)
 
     return {
         "pantry_candidates": [_consolidated_to_dict(c) for c in pantry],
@@ -1533,28 +1533,24 @@ def exclude_pantry_items(
 
 def get_user_pantry() -> dict[str, Any]:
     """
-    Get the user's saved pantry configuration.
+    Get the user's saved pantry items.
+
+    The pantry is a simple text file with one item per line.
+    Edit directly at ~/.nemlig-shopper/pantry.txt
 
     Returns:
         {
-            "user_items": [str],  # Custom items added by user
-            "excluded_defaults": [str],  # Default items user has excluded
-            "all_active_items": [str],  # All currently active pantry items
-            "default_count": int,
-            "user_count": int,
-            "total_active": int
+            "items": [str],  # All pantry items
+            "count": int,
+            "file": str  # Path to pantry file
         }
     """
-    config = load_pantry_config(PANTRY_FILE)
-    all_active = config.all_pantry_items
+    items = load_pantry(PANTRY_FILE)
 
     return {
-        "user_items": sorted(config.user_items),
-        "excluded_defaults": sorted(config.excluded_defaults),
-        "all_active_items": sorted(all_active),
-        "default_count": len(DEFAULT_PANTRY_ITEMS),
-        "user_count": len(config.user_items),
-        "total_active": len(all_active),
+        "items": sorted(items),
+        "count": len(items),
+        "file": str(PANTRY_FILE),
     }
 
 

@@ -6,7 +6,7 @@ comparing against known expected output from data/input.txt and data/output.pdf.
 
 import pytest
 
-from nemlig_shopper.pantry import DEFAULT_PANTRY_ITEMS, PantryConfig, _is_pantry_item
+from nemlig_shopper.pantry import DEFAULT_PANTRY_ITEMS, _is_pantry_item
 
 # Expected items from data/input.txt
 INPUT_ITEMS = {
@@ -100,8 +100,7 @@ class TestPantryFiltering:
     @pytest.mark.parametrize("item", EXPECTED_PANTRY_ITEMS)
     def test_pantry_items_are_filtered(self, item):
         """Known pantry staples should be identified as pantry items."""
-        config = PantryConfig()
-        assert _is_pantry_item(item, config.all_pantry_items), f"'{item}' should be a pantry item"
+        assert _is_pantry_item(item, DEFAULT_PANTRY_ITEMS), f"'{item}' should be a pantry item"
 
     @pytest.mark.parametrize("item", FRESH_PRODUCE_NOT_PANTRY)
     def test_fresh_produce_not_filtered_by_default(self, item):
@@ -113,17 +112,19 @@ class TestPantryFiltering:
         if exact_match:
             pytest.skip(f"'{item}' is in default pantry - may need NEVER_FILTER list")
 
-    def test_pantry_config_customization(self):
-        """User should be able to customize pantry items."""
-        config = PantryConfig()
+    def test_pantry_customization_with_file(self, tmp_path):
+        """User should be able to customize pantry via text file."""
+        from nemlig_shopper.pantry import add_to_pantry, remove_from_pantry
+
+        pantry_file = tmp_path / "pantry.txt"
 
         # Add custom item
-        config.user_items.add("special sauce")
-        assert "special sauce" in config.all_pantry_items
+        items = add_to_pantry(["special sauce"], pantry_file)
+        assert "special sauce" in items
 
-        # Exclude default item
-        config.excluded_defaults.add("salt")
-        assert "salt" not in config.all_pantry_items
+        # Remove an item
+        items = remove_from_pantry(["special sauce"], pantry_file)
+        assert "special sauce" not in items
 
 
 class TestSearchTermMapping:
@@ -249,8 +250,7 @@ class TestPantryFilteringSavings:
 
     def test_filtered_items_are_staples(self):
         """Filtered items should be common household staples."""
-        config = PantryConfig()
         for item_name, _ in self.FILTERED_ITEMS:
             assert _is_pantry_item(
-                item_name, config.all_pantry_items
+                item_name, DEFAULT_PANTRY_ITEMS
             ), f"'{item_name}' should be identified as pantry item"

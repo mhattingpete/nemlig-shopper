@@ -5,16 +5,6 @@ import click
 from .api import NemligAPI, NemligAPIError
 from .config import PANTRY_FILE, clear_credentials, get_credentials, save_credentials
 from .export import export_shopping_list
-from .favorites import (
-    FavoritesError,
-    delete_favorite,
-    get_favorite,
-    get_favorite_product_ids,
-    get_favorite_recipe,
-    list_favorites,
-    save_favorite,
-    update_favorite_matches,
-)
 from .matcher import (
     ProductMatch,
     calculate_total_cost,
@@ -30,7 +20,7 @@ from .pantry import (
     clear_pantry,
     filter_pantry_items,
     identify_pantry_items,
-    load_pantry_config,
+    load_pantry,
     remove_from_pantry,
 )
 from .pantry_tui import interactive_pantry_check, simple_pantry_prompt
@@ -369,7 +359,6 @@ def cart():
 @click.option("--vegan", is_flag=True, help="Filter for vegan products")
 @click.option("--interactive", "-i", is_flag=True, help="Interactive review with TUI")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
-@click.option("--save-as", help="Save as favorite with this name (single recipe only)")
 @click.option("--skip-pantry-check", is_flag=True, help="Skip pantry item check")
 @click.option("--remember-pantry", is_flag=True, help="Remember excluded items as pantry")
 @click.option("--skip-ambiguous-check", is_flag=True, help="Skip prompts for ambiguous items")
@@ -389,7 +378,6 @@ def add_to_cart(
     vegan: bool,
     interactive: bool,
     yes: bool,
-    save_as: str | None,
     skip_pantry_check: bool,
     remember_pantry: bool,
     skip_ambiguous_check: bool,
@@ -474,11 +462,6 @@ def add_to_cart(
         click.echo("✗ --scale/--servings only works with a single recipe URL.", err=True)
         raise SystemExit(1)
 
-    # Validate save-as (only for single recipe)
-    if save_as and (len(all_urls) != 1 or manual_items):
-        click.echo("✗ --save-as only works with a single recipe URL.", err=True)
-        raise SystemExit(1)
-
     try:
         # Store (ScaledIngredient, source, meal_context) tuples
         all_ingredients: list[tuple[ScaledIngredient, str, str | None]] = []
@@ -547,8 +530,8 @@ def add_to_cart(
         # Pantry check
         consolidated_to_match = consolidated
         if not skip_pantry_check:
-            pantry_config = load_pantry_config(PANTRY_FILE)
-            pantry_candidates, _ = identify_pantry_items(consolidated, pantry_config)
+            pantry_items = load_pantry(PANTRY_FILE)
+            pantry_candidates, _ = identify_pantry_items(consolidated, pantry_items)
 
             if pantry_candidates:
                 click.echo(f"\nFound {len(pantry_candidates)} potential pantry items.")
@@ -691,12 +674,6 @@ def add_to_cart(
         click.echo(f"\n✓ Added {success_count} products to cart")
         if fail_count:
             click.echo(f"✗ Failed to add {fail_count} products")
-
-        # Save as favorite (single recipe only)
-        if save_as and len(recipes) == 1:
-            match_dicts = [m.to_dict() for m in matches]
-            save_favorite(save_as, recipes[0], match_dicts, overwrite=True)
-            click.echo(f"✓ Saved as favorite: {save_as}")
 
         click.echo("\nView cart: https://www.nemlig.com/LeveringsInfo")
 
@@ -900,298 +877,6 @@ def export_list(
 
 
 # ============================================================================
-# Favorites Commands
-# ============================================================================
-
-
-@cli.group()
-def favorites():
-    """Manage saved recipe favorites."""
-    pass
-
-
-@favorites.command("list")
-def favorites_list():
-    """List all saved favorites."""
-    favs = list_favorites()
-
-    if not favs:
-        click.echo("No favorites saved yet.")
-        click.echo("Use 'nemlig favorites save <name>' after parsing a recipe.")
-        return
-
-    click.echo()
-    click.echo("SAVED FAVORITES")
-    click.echo("=" * 60)
-
-    for fav in favs:
-        name = fav["name"]
-        title = fav["title"]
-        count = fav["ingredient_count"]
-        servings = fav.get("servings")
-        has_matches = "✓" if fav["has_product_matches"] else "✗"
-
-        servings_str = f" ({servings} servings)" if servings else ""
-        click.echo(f"\n  {name}")
-        click.echo(f"    {title}{servings_str}")
-        click.echo(f"    {count} ingredients | Products matched: {has_matches}")
-
-    click.echo()
-
-
-@favorites.command("show")
-@click.argument("name")
-def favorites_show(name: str):
-    """Show details of a saved favorite."""
-    try:
-        recipe = get_favorite_recipe(name)
-        favorite = get_favorite(name)
-
-        display_recipe(recipe)
-
-        if favorite.get("product_matches"):
-            click.echo("Saved Product Matches:")
-            for match in favorite["product_matches"]:
-                if match.get("matched"):
-                    click.echo(f"  • {match['ingredient_name']} → {match['product_name']}")
-                else:
-                    click.echo(f"  • {match['ingredient_name']} → (no match)")
-
-        click.echo(f"\nSaved: {favorite.get('saved_at', 'Unknown')}")
-
-    except FavoritesError as e:
-        click.echo(f"✗ {e}", err=True)
-        raise SystemExit(1) from None
-
-
-@favorites.command("save")
-@click.argument("name")
-@click.argument("url")
-@click.option("--overwrite", is_flag=True, help="Overwrite if exists")
-def favorites_save(name: str, url: str, overwrite: bool):
-    """Save a recipe URL as a favorite."""
-    try:
-        click.echo(f"Parsing recipe from: {url}")
-        recipe = parse_recipe_url(url)
-
-        save_favorite(name, recipe, overwrite=overwrite)
-        click.echo(f"✓ Saved '{recipe.title}' as favorite: {name}")
-
-    except FavoritesError as e:
-        click.echo(f"✗ {e}", err=True)
-        raise SystemExit(1) from None
-    except Exception as e:
-        click.echo(f"✗ Failed: {e}", err=True)
-        raise SystemExit(1) from None
-
-
-@favorites.command("delete")
-@click.argument("name")
-@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
-def favorites_delete(name: str, yes: bool):
-    """Delete a saved favorite."""
-    try:
-        if not yes:
-            if not click.confirm(f"Delete favorite '{name}'?"):
-                click.echo("Cancelled.")
-                return
-
-        delete_favorite(name)
-        click.echo(f"✓ Deleted favorite: {name}")
-
-    except FavoritesError as e:
-        click.echo(f"✗ {e}", err=True)
-        raise SystemExit(1) from None
-
-
-@favorites.command("order")
-@click.argument("name")
-@click.option("--scale", "-s", type=float, help="Scale recipe by multiplier")
-@click.option("--servings", "-S", type=int, help="Scale to target servings")
-@click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
-@click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
-@click.option("--lactose-free", is_flag=True, help="Filter for lactose-free products")
-@click.option("--gluten-free", is_flag=True, help="Filter for gluten-free products")
-@click.option("--vegan", is_flag=True, help="Filter for vegan products")
-@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
-@click.option("--rematch", is_flag=True, help="Re-match products instead of using saved matches")
-def favorites_order(
-    name: str,
-    scale: float | None,
-    servings: int | None,
-    organic: bool,
-    budget: bool,
-    lactose_free: bool,
-    gluten_free: bool,
-    vegan: bool,
-    yes: bool,
-    rematch: bool,
-):
-    """Order a favorite recipe to cart."""
-    api = get_api()
-
-    if not ensure_logged_in(api):
-        raise SystemExit(1)
-
-    # Build dietary filter lists
-    allergies: list[str] = []
-    dietary: list[str] = []
-    if lactose_free:
-        allergies.append("lactose")
-    if gluten_free:
-        allergies.append("gluten")
-    if vegan:
-        dietary.append("vegan")
-
-    try:
-        recipe = get_favorite_recipe(name)
-        favorite = get_favorite(name)
-
-        click.echo(f"Ordering: {recipe.title}")
-
-        # Scale recipe
-        scaled_ings, factor, new_servings = scale_recipe(
-            recipe, target_servings=servings, multiplier=scale
-        )
-
-        if factor != 1.0:
-            scale_info = format_scale_info(factor, recipe.servings, new_servings)
-            click.echo(f"Scaling: {scale_info}")
-
-        # Show preference mode
-        if organic:
-            click.echo("Mode: Preferring organic products")
-        if budget:
-            click.echo("Mode: Preferring budget-friendly products")
-        if allergies or dietary:
-            filters = allergies + dietary
-            click.echo(f"Dietary filters: {', '.join(filters)}")
-
-        # Use saved matches or re-match
-        # Force rematch if organic/budget/dietary preferences are set
-        force_rematch = rematch or organic or budget or allergies or dietary
-        if not force_rematch and favorite.get("product_matches") and factor == 1.0:
-            # Use saved product IDs (quick re-order)
-            click.echo("Using saved product matches...")
-            cart_items = get_favorite_product_ids(name)
-        else:
-            # Re-match products (needed for scaling, preferences, or if no saved matches)
-            click.echo("Matching ingredients to products...")
-            matches = match_ingredients(
-                api,
-                scaled_ings,
-                prefer_organic=organic,
-                prefer_budget=budget,
-                allergies=allergies if allergies else None,
-                dietary=dietary if dietary else None,
-            )
-            display_matches(matches)
-
-            cart_items = prepare_cart_items(matches)
-
-            # Update saved matches
-            match_dicts = [m.to_dict() for m in matches]
-            update_favorite_matches(name, match_dicts)
-
-        if not cart_items:
-            click.echo("No products to add.")
-            return
-
-        # Confirm
-        if not yes:
-            if not click.confirm(f"\nAdd {len(cart_items)} products to cart?"):
-                click.echo("Cancelled.")
-                return
-
-        # Add to cart
-        result = api.add_multiple_to_cart(cart_items)
-
-        success_count = len(result["success"])
-        fail_count = len(result["failed"])
-
-        click.echo(f"\n✓ Added {success_count} products to cart")
-        if fail_count:
-            click.echo(f"✗ Failed to add {fail_count} products")
-
-    except FavoritesError as e:
-        click.echo(f"✗ {e}", err=True)
-        raise SystemExit(1) from None
-    except NemligAPIError as e:
-        click.echo(f"✗ API error: {e}", err=True)
-        raise SystemExit(1) from None
-
-
-@favorites.command("update")
-@click.argument("name")
-@click.option("--organic", "-o", is_flag=True, help="Prefer organic products")
-@click.option("--budget", "-b", is_flag=True, help="Prefer cheaper products")
-@click.option("--lactose-free", is_flag=True, help="Filter for lactose-free products")
-@click.option("--gluten-free", is_flag=True, help="Filter for gluten-free products")
-@click.option("--vegan", is_flag=True, help="Filter for vegan products")
-def favorites_update(
-    name: str,
-    organic: bool,
-    budget: bool,
-    lactose_free: bool,
-    gluten_free: bool,
-    vegan: bool,
-):
-    """Re-match products for a saved favorite."""
-    api = get_api()
-
-    # Build dietary filter lists
-    allergies: list[str] = []
-    dietary: list[str] = []
-    if lactose_free:
-        allergies.append("lactose")
-    if gluten_free:
-        allergies.append("gluten")
-    if vegan:
-        dietary.append("vegan")
-
-    try:
-        recipe = get_favorite_recipe(name)
-
-        click.echo(f"Re-matching products for: {recipe.title}")
-
-        # Show preference mode
-        if organic:
-            click.echo("Mode: Preferring organic products")
-        if budget:
-            click.echo("Mode: Preferring budget-friendly products")
-        if allergies or dietary:
-            filters = allergies + dietary
-            click.echo(f"Dietary filters: {', '.join(filters)}")
-
-        # Scale with factor 1.0 (no scaling)
-        scaled_ings, _, _ = scale_recipe(recipe)
-
-        # Match products
-        matches = match_ingredients(
-            api,
-            scaled_ings,
-            prefer_organic=organic,
-            prefer_budget=budget,
-            allergies=allergies if allergies else None,
-            dietary=dietary if dietary else None,
-        )
-        display_matches(matches)
-
-        # Save matches
-        match_dicts = [m.to_dict() for m in matches]
-        update_favorite_matches(name, match_dicts)
-
-        click.echo(f"✓ Updated product matches for: {name}")
-
-    except FavoritesError as e:
-        click.echo(f"✗ {e}", err=True)
-        raise SystemExit(1) from None
-    except NemligAPIError as e:
-        click.echo(f"✗ API error: {e}", err=True)
-        raise SystemExit(1) from None
-
-
-# ============================================================================
 # Preferences Commands
 # ============================================================================
 
@@ -1277,39 +962,25 @@ def pantry():
 
 @pantry.command("list")
 def pantry_list():
-    """List your saved pantry items."""
-    config = load_pantry_config(PANTRY_FILE)
+    """List your pantry items.
 
-    # Get all active items
-    all_items = config.all_pantry_items
+    Edit the pantry file directly at ~/.nemlig-shopper/pantry.txt
+    """
+    items = load_pantry(PANTRY_FILE)
 
     click.echo()
     click.echo("YOUR PANTRY")
     click.echo("=" * 50)
 
-    if config.user_items:
-        click.echo("\n📦 Custom items (added by you):")
-        for item in sorted(config.user_items):
-            click.echo(f"  • {item}")
-
-    default_active = DEFAULT_PANTRY_ITEMS - config.excluded_defaults
-    if default_active:
-        click.echo(f"\n📋 Default items ({len(default_active)} active):")
-        # Show first 10 defaults
-        sorted_defaults = sorted(default_active)
-        for item in sorted_defaults[:10]:
-            click.echo(f"  • {item}")
-        if len(sorted_defaults) > 10:
-            click.echo(f"  ... and {len(sorted_defaults) - 10} more")
-            click.echo("  (use 'nemlig pantry defaults' to see all)")
-
-    if config.excluded_defaults:
-        click.echo(f"\n🚫 Excluded defaults ({len(config.excluded_defaults)}):")
-        for item in sorted(config.excluded_defaults):
-            click.echo(f"  • {item}")
+    if items:
+        for item in sorted(items):
+            click.echo(f"  {item}")
+    else:
+        click.echo("  (empty)")
 
     click.echo()
-    click.echo(f"Total active pantry items: {len(all_items)}")
+    click.echo(f"Total: {len(items)} items")
+    click.echo(f"File: {PANTRY_FILE}")
     click.echo()
 
 
@@ -1334,9 +1005,6 @@ def pantry_add(items: tuple[str, ...]):
 @click.argument("items", nargs=-1, required=True)
 def pantry_remove(items: tuple[str, ...]):
     """Remove items from your pantry.
-
-    If the item is a default pantry item, it will be excluded
-    from the defaults. Otherwise, it's removed from your custom items.
 
     Examples:
 

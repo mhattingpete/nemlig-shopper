@@ -7,23 +7,22 @@ import pytest
 
 from nemlig_shopper.pantry import (
     DEFAULT_PANTRY_ITEMS,
-    PantryConfig,
     add_to_pantry,
     clear_pantry,
     filter_pantry_items,
     get_default_pantry_items,
     identify_pantry_items,
-    load_pantry_config,
+    load_pantry,
     remove_from_pantry,
-    save_pantry_config,
+    save_pantry,
 )
 from nemlig_shopper.planner import ConsolidatedIngredient
 
 
 @pytest.fixture
 def temp_pantry_file(tmp_path) -> Path:
-    """Create a temporary pantry file."""
-    return tmp_path / "pantry.json"
+    """Create a temporary pantry file path."""
+    return tmp_path / "pantry.txt"
 
 
 @pytest.fixture
@@ -46,86 +45,44 @@ def sample_ingredients() -> list[ConsolidatedIngredient]:
 
 
 # =============================================================================
-# PantryConfig Tests
-# =============================================================================
-
-
-class TestPantryConfig:
-    """Tests for PantryConfig dataclass."""
-
-    def test_default_config(self):
-        """Default config should have empty user items and exclusions."""
-        config = PantryConfig()
-        assert config.user_items == set()
-        assert config.excluded_defaults == set()
-        assert config.updated_at is None
-
-    def test_all_pantry_items_default(self):
-        """Default pantry items should equal DEFAULT_PANTRY_ITEMS."""
-        config = PantryConfig()
-        assert config.all_pantry_items == DEFAULT_PANTRY_ITEMS
-
-    def test_all_pantry_items_with_user_items(self):
-        """User items should be added to the active set."""
-        config = PantryConfig(user_items={"fish sauce", "sesame oil"})
-        items = config.all_pantry_items
-        assert "fish sauce" in items
-        assert "sesame oil" in items
-        assert "salt" in items  # Default item still there
-
-    def test_all_pantry_items_with_exclusions(self):
-        """Excluded defaults should be removed from the active set."""
-        config = PantryConfig(excluded_defaults={"salt", "pepper"})
-        items = config.all_pantry_items
-        assert "salt" not in items
-        assert "pepper" not in items
-        assert "olive oil" in items  # Other defaults still there
-
-    def test_to_dict_and_from_dict_roundtrip(self):
-        """Config should survive serialization roundtrip."""
-        config = PantryConfig(
-            user_items={"fish sauce", "mirin"},
-            excluded_defaults={"eggs"},
-        )
-        data = config.to_dict()
-        restored = PantryConfig.from_dict(data)
-
-        assert restored.user_items == config.user_items
-        assert restored.excluded_defaults == config.excluded_defaults
-
-
-# =============================================================================
 # Persistence Tests
 # =============================================================================
 
 
 class TestPersistence:
-    """Tests for loading and saving pantry config."""
+    """Tests for loading and saving pantry items."""
 
-    def test_load_nonexistent_file(self, temp_pantry_file):
-        """Loading nonexistent file should return default config."""
-        config = load_pantry_config(temp_pantry_file)
-        assert config.user_items == set()
-        assert config.excluded_defaults == set()
+    def test_load_nonexistent_file_creates_defaults(self, temp_pantry_file):
+        """Loading nonexistent file should create it with defaults."""
+        items = load_pantry(temp_pantry_file)
+        assert items == DEFAULT_PANTRY_ITEMS
+        assert temp_pantry_file.exists()
 
     def test_save_and_load_roundtrip(self, temp_pantry_file):
-        """Config should survive save/load roundtrip."""
-        config = PantryConfig(
-            user_items={"fish sauce", "rice vinegar"},
-            excluded_defaults={"eggs"},
-        )
-        save_pantry_config(config, temp_pantry_file)
+        """Items should survive save/load roundtrip."""
+        items = {"fish sauce", "rice vinegar", "salt"}
+        save_pantry(items, temp_pantry_file)
 
-        loaded = load_pantry_config(temp_pantry_file)
-        assert loaded.user_items == config.user_items
-        assert loaded.excluded_defaults == config.excluded_defaults
-        assert loaded.updated_at is not None
+        loaded = load_pantry(temp_pantry_file)
+        assert loaded == items
 
-    def test_load_corrupted_file(self, temp_pantry_file):
-        """Loading corrupted file should return default config."""
-        temp_pantry_file.write_text("not valid json {{{")
-        config = load_pantry_config(temp_pantry_file)
-        assert config.user_items == set()
+    def test_load_text_file_format(self, temp_pantry_file):
+        """Should load items from simple text file (one per line)."""
+        temp_pantry_file.write_text("salt\npepper\nolive oil\n")
+        items = load_pantry(temp_pantry_file)
+        assert items == {"salt", "pepper", "olive oil"}
+
+    def test_load_ignores_empty_lines(self, temp_pantry_file):
+        """Should ignore empty lines in the file."""
+        temp_pantry_file.write_text("salt\n\npepper\n  \n")
+        items = load_pantry(temp_pantry_file)
+        assert items == {"salt", "pepper"}
+
+    def test_normalizes_items_on_load(self, temp_pantry_file):
+        """Should normalize items (lowercase, strip whitespace)."""
+        temp_pantry_file.write_text("  SALT  \n  Olive Oil  \n")
+        items = load_pantry(temp_pantry_file)
+        assert items == {"salt", "olive oil"}
 
 
 # =============================================================================
@@ -178,18 +135,15 @@ class TestIdentifyPantryItems:
         # Other: chicken breast, tomatoes
         assert len(other) == 2
 
-    def test_uses_custom_config(self, sample_ingredients):
-        """Should use custom pantry config if provided."""
-        # Config that excludes salt but adds tomatoes
-        config = PantryConfig(
-            user_items={"tomatoes"},
-            excluded_defaults={"salt"},
-        )
-        pantry, other = identify_pantry_items(sample_ingredients, config)
+    def test_uses_custom_items(self, sample_ingredients):
+        """Should use custom pantry items set if provided."""
+        # Custom set that includes tomatoes but not salt
+        custom_items = {"tomatoes", "olive oil"}
+        pantry, other = identify_pantry_items(sample_ingredients, custom_items)
         pantry_names = {p.name for p in pantry}
 
-        assert "tomatoes" in pantry_names  # Added by user
-        assert "salt" not in pantry_names  # Excluded by user
+        assert "tomatoes" in pantry_names  # In custom set
+        assert "salt" not in pantry_names  # Not in custom set
 
 
 # =============================================================================
@@ -238,42 +192,37 @@ class TestAddRemove:
 
     def test_add_to_empty_pantry(self, temp_pantry_file):
         """Adding items to empty pantry should work."""
-        config = add_to_pantry(["fish sauce", "mirin"], temp_pantry_file)
-        assert "fish sauce" in config.user_items
-        assert "mirin" in config.user_items
+        items = add_to_pantry(["fish sauce", "mirin"], temp_pantry_file)
+        assert "fish sauce" in items
+        assert "mirin" in items
 
-    def test_add_removes_from_excluded(self, temp_pantry_file):
-        """Adding a previously excluded default should remove from exclusions."""
-        # First exclude salt
-        remove_from_pantry(["salt"], temp_pantry_file)
-        config = load_pantry_config(temp_pantry_file)
-        assert "salt" in config.excluded_defaults
+    def test_add_to_existing_pantry(self, temp_pantry_file):
+        """Adding items should preserve existing items."""
+        save_pantry({"salt", "pepper"}, temp_pantry_file)
+        items = add_to_pantry(["fish sauce"], temp_pantry_file)
+        assert "salt" in items
+        assert "pepper" in items
+        assert "fish sauce" in items
 
-        # Now add salt back
-        config = add_to_pantry(["salt"], temp_pantry_file)
-        assert "salt" not in config.excluded_defaults
+    def test_remove_item(self, temp_pantry_file):
+        """Removing an item should remove it from the set."""
+        save_pantry({"salt", "pepper", "fish sauce"}, temp_pantry_file)
+        items = remove_from_pantry(["fish sauce"], temp_pantry_file)
+        assert "fish sauce" not in items
+        assert "salt" in items
 
-    def test_remove_user_item(self, temp_pantry_file):
-        """Removing a user item should remove it from user_items."""
-        add_to_pantry(["fish sauce"], temp_pantry_file)
-        config = remove_from_pantry(["fish sauce"], temp_pantry_file)
-        assert "fish sauce" not in config.user_items
-
-    def test_remove_default_item(self, temp_pantry_file):
-        """Removing a default item should add it to excluded_defaults."""
-        config = remove_from_pantry(["salt"], temp_pantry_file)
-        assert "salt" in config.excluded_defaults
+    def test_remove_nonexistent_item(self, temp_pantry_file):
+        """Removing nonexistent item should not raise error."""
+        save_pantry({"salt", "pepper"}, temp_pantry_file)
+        items = remove_from_pantry(["nonexistent"], temp_pantry_file)
+        assert items == {"salt", "pepper"}
 
     def test_clear_pantry(self, temp_pantry_file):
         """Clear should reset to defaults."""
-        add_to_pantry(["fish sauce"], temp_pantry_file)
-        remove_from_pantry(["salt"], temp_pantry_file)
-
+        save_pantry({"fish sauce", "custom item"}, temp_pantry_file)
         clear_pantry(temp_pantry_file)
-        config = load_pantry_config(temp_pantry_file)
-
-        assert config.user_items == set()
-        assert config.excluded_defaults == set()
+        items = load_pantry(temp_pantry_file)
+        assert items == DEFAULT_PANTRY_ITEMS
 
 
 # =============================================================================
@@ -317,16 +266,17 @@ class TestDefaultItems:
 class TestCLIIntegration:
     """Tests for CLI pantry commands."""
 
-    def test_pantry_list_command(self):
+    def test_pantry_list_command(self, temp_pantry_file):
         """Pantry list command should work."""
         from click.testing import CliRunner
 
         from nemlig_shopper.cli import cli
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["pantry", "list"])
-        assert result.exit_code == 0
-        assert "YOUR PANTRY" in result.output
+        with patch("nemlig_shopper.cli.PANTRY_FILE", temp_pantry_file):
+            result = runner.invoke(cli, ["pantry", "list"])
+            assert result.exit_code == 0
+            assert "YOUR PANTRY" in result.output
 
     def test_pantry_defaults_command(self):
         """Pantry defaults command should show default items."""
@@ -416,15 +366,14 @@ class TestLLMTools:
         assert "chicken breast" in names
 
     def test_get_user_pantry_tool(self, temp_pantry_file):
-        """LLM tool should return pantry config."""
+        """LLM tool should return pantry items."""
         from nemlig_shopper import llm_tools
 
         with patch("nemlig_shopper.llm_tools.PANTRY_FILE", temp_pantry_file):
             result = llm_tools.get_user_pantry()
 
-        assert "user_items" in result
-        assert "all_active_items" in result
-        assert result["default_count"] == len(DEFAULT_PANTRY_ITEMS)
+        assert "items" in result
+        assert "count" in result
 
     def test_get_default_pantry_items_tool(self):
         """LLM tool should return default items."""
