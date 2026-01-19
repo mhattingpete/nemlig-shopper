@@ -102,6 +102,7 @@ uv run nemlig search "mælk"
 
 # Parse recipe without adding to cart
 uv run nemlig parse URL
+uv run nemlig parse --text "2 eggs, 100g flour, milk"
 
 # Manage favorites (saved recipes)
 uv run nemlig favorites list

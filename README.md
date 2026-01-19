@@ -11,7 +11,6 @@ A CLI tool that parses recipes from URLs or text, matches ingredients to product
 - **Pantry Check**: Identifies common household items (salt, oil, etc.) so you don't buy what you have
 - **Dietary Filters**: Filter for lactose-free, gluten-free, or vegan products
 - **Interactive Review**: TUI for reviewing and swapping product matches before checkout
-- **Price Tracking**: SQLite-backed price history
 - **Favorites**: Save recipes locally for quick re-ordering
 - **Export**: Shopping lists to JSON, Markdown, or PDF
 
@@ -47,7 +46,7 @@ See [QUICKSTART.md](QUICKSTART.md) for more examples.
 |---------|-------------|
 | `nemlig login` | Authenticate with Nemlig.com |
 | `nemlig add` | Parse recipes/items and add to cart |
-| `nemlig parse URL` | Parse recipe without adding to cart |
+| `nemlig parse` | Parse recipe from URL or text without adding to cart |
 | `nemlig search QUERY` | Search Nemlig products |
 | `nemlig favorites` | Manage saved recipes |
 | `nemlig pantry` | Manage household pantry items |
@@ -126,7 +125,7 @@ uv run nemlig pantry clear
 uv run nemlig favorites list
 
 # Save a recipe
-uv run nemlig add URL --save-as "sunday-dinner"
+uv run nemlig favorites save "sunday-dinner" URL
 
 # Quick re-order
 uv run nemlig favorites order "sunday-dinner"
@@ -151,7 +150,6 @@ Configuration files are stored in `~/.nemlig-shopper/`:
 - `credentials.json` - Login credentials (chmod 600)
 - `favorites.json` - Saved recipes
 - `pantry.json` - Custom pantry items
-- `prices.db` - Price history (SQLite)
 
 ## Supported Recipe Sites
 
