@@ -42,7 +42,6 @@ from .preferences import (
     get_preference_count,
     sync_preferences_from_orders,
 )
-from .price_tracker import get_tracker, record_search_prices
 from .recipe_parser import Recipe, parse_recipe_text, parse_recipe_url
 from .scaler import ScaledIngredient, format_scale_info, scale_recipe
 from .tui import interactive_review
@@ -205,14 +204,46 @@ def logout():
 
 
 @cli.command("parse")
-@click.argument("url")
+@click.argument("url", required=False)
+@click.option("--text", "-t", "input_text", help="Parse ingredients from text instead of URL")
+@click.option("--title", help="Recipe title (for text input)")
 @click.option("--scale", "-s", type=float, help="Scale recipe by multiplier (e.g., 2 for double)")
 @click.option("--servings", "-S", type=int, help="Scale to target servings")
-def parse_url(url: str, scale: float | None, servings: int | None):
-    """Parse a recipe from a URL."""
+def parse_recipe_cmd(
+    url: str | None,
+    input_text: str | None,
+    title: str | None,
+    scale: float | None,
+    servings: int | None,
+):
+    """Parse a recipe from URL or text (without adding to cart).
+
+    Examples:
+
+    \b
+        nemlig parse https://recipe.com/pasta
+        nemlig parse --text "2 eggs, 100g flour, 1 cup milk"
+        nemlig parse --text "eggs, flour" --title "Pancakes"
+        nemlig parse https://recipe.com/pasta --scale 2
+    """
+    if not url and not input_text:
+        click.echo("✗ Provide a URL or use --text for manual input.", err=True)
+        raise SystemExit(1)
+
+    if url and input_text:
+        click.echo("✗ Provide either URL or --text, not both.", err=True)
+        raise SystemExit(1)
+
     try:
-        click.echo(f"Parsing recipe from: {url}")
-        recipe = parse_recipe_url(url)
+        if url:
+            click.echo(f"Parsing recipe from: {url}")
+            recipe = parse_recipe_url(url)
+        else:
+            assert input_text is not None  # Validated above
+            # Handle comma-separated input
+            if "," in input_text and "\n" not in input_text:
+                input_text = input_text.replace(",", "\n")
+            recipe = parse_recipe_text(title or "Manual Recipe", input_text, servings)
 
         # Apply scaling if requested
         if scale or servings:
@@ -220,8 +251,6 @@ def parse_url(url: str, scale: float | None, servings: int | None):
                 recipe, target_servings=servings, multiplier=scale
             )
             scale_info = format_scale_info(factor, recipe.servings, new_servings)
-
-            # Update recipe with scaled values for display
             display_recipe(recipe, scale_info)
 
             click.echo("Scaled Ingredients:")
@@ -236,41 +265,6 @@ def parse_url(url: str, scale: float | None, servings: int | None):
     except Exception as e:
         click.echo(f"✗ Failed to parse recipe: {e}", err=True)
         raise SystemExit(1) from None
-
-
-@cli.command("parse-text")
-@click.option("--title", "-t", prompt="Recipe title", help="Name for the recipe")
-@click.option("--servings", "-S", type=int, help="Number of servings")
-@click.option("--scale", "-s", type=float, help="Scale recipe by multiplier")
-def parse_text_cmd(title: str, servings: int | None, scale: float | None):
-    """Parse ingredients from text input."""
-    click.echo("Enter ingredients (one per line, empty line to finish):")
-
-    lines = []
-    while True:
-        line = input()
-        if not line:
-            break
-        lines.append(line)
-
-    if not lines:
-        click.echo("No ingredients entered.", err=True)
-        raise SystemExit(1)
-
-    ingredients_text = "\n".join(lines)
-    recipe = parse_recipe_text(title, ingredients_text, servings)
-
-    # Apply scaling if requested
-    if scale:
-        scaled_ings, factor, new_servings = scale_recipe(recipe, multiplier=scale)
-        scale_info = format_scale_info(factor, recipe.servings, new_servings)
-        display_recipe(recipe, scale_info)
-
-        click.echo("Scaled Ingredients:")
-        for i, ing in enumerate(scaled_ings, 1):
-            click.echo(f"  {i}. {ing}")
-    else:
-        display_recipe(recipe)
 
 
 # ============================================================================
@@ -1391,192 +1385,6 @@ def pantry_defaults():
         click.echo(f"  • {item}")
 
     click.echo()
-
-
-# ============================================================================
-# Price Tracking Commands
-# ============================================================================
-
-
-@cli.group()
-def prices():
-    """Track and analyze product prices over time."""
-    pass
-
-
-@prices.command("track")
-@click.argument("query")
-@click.option("--limit", "-l", default=10, help="Number of products to track")
-def prices_track(query: str, limit: int):
-    """Track prices for products matching a search query.
-
-    This searches for products and records their current prices
-    to build price history for future analysis.
-
-    Examples:
-
-        nemlig prices track "mælk"
-
-        nemlig prices track "pasta" --limit 20
-    """
-    api = get_api()
-
-    try:
-        click.echo(f"Searching for: {query}")
-        products = api.search_products(query, limit=limit)
-
-        if not products:
-            click.echo("No products found.")
-            return
-
-        count = record_search_prices(products)
-        click.echo(f"✓ Recorded prices for {count} products")
-
-        # Show what was tracked
-        click.echo("\nTracked products:")
-        for product in products[:10]:
-            name = product.get("name", "Unknown")[:40]
-            price = product.get("price")
-            price_str = f"{price:.2f} DKK" if price else "N/A"
-            click.echo(f"  • {name} - {price_str}")
-
-        if len(products) > 10:
-            click.echo(f"  ... and {len(products) - 10} more")
-
-    except NemligAPIError as e:
-        click.echo(f"✗ Search failed: {e}", err=True)
-        raise SystemExit(1) from None
-
-
-@prices.command("history")
-@click.argument("query")
-@click.option("--days", "-d", default=30, help="Number of days to look back")
-def prices_history(query: str, days: int):
-    """Show price history for a product.
-
-    Search by product name to see how prices have changed over time.
-
-    Examples:
-
-        nemlig prices history "minimælk"
-
-        nemlig prices history "hakket oksekød" --days 60
-    """
-    tracker = get_tracker()
-
-    # First try to find matching products
-    products = tracker.search_products(query, limit=5)
-
-    if not products:
-        click.echo(f"No tracked products found matching '{query}'")
-        click.echo("Use 'nemlig prices track <query>' to start tracking prices.")
-        return
-
-    # Show history for each matching product
-    for product in products:
-        product_id = product["id"]
-        product_name = product["name"]
-
-        click.echo()
-        click.echo(f"📊 {product_name}")
-        click.echo("-" * 50)
-
-        # Get stats
-        stats = tracker.get_price_stats(product_id)
-        if stats:
-            click.echo(f"  Current: {stats.current_price:.2f} DKK")
-            click.echo(f"  Average: {stats.avg_price:.2f} DKK")
-            click.echo(f"  Min: {stats.min_price:.2f} DKK | Max: {stats.max_price:.2f} DKK")
-            click.echo(f"  Records: {stats.price_count}")
-
-            if stats.is_on_sale:
-                click.echo(f"  🏷️  ON SALE: {stats.discount_percent:.1f}% below average!")
-
-        # Get recent history
-        history = tracker.get_price_history(product_id=product_id, days=days)
-        if history:
-            click.echo("\n  Recent prices:")
-            for record in history[:5]:
-                date_str = record.recorded_at.strftime("%Y-%m-%d %H:%M")
-                click.echo(f"    {date_str}: {record.price:.2f} DKK")
-
-
-@prices.command("alerts")
-@click.option("--min-discount", "-m", default=5.0, help="Minimum discount percentage")
-def prices_alerts(min_discount: float):
-    """Show products currently on sale.
-
-    Lists products where the current price is significantly
-    below the historical average.
-
-    Examples:
-
-        nemlig prices alerts
-
-        nemlig prices alerts --min-discount 10
-    """
-    tracker = get_tracker()
-
-    alerts = tracker.get_price_alerts(min_discount=min_discount)
-
-    if not alerts:
-        click.echo(f"No products found with {min_discount}%+ discount.")
-        click.echo("Track more prices with 'nemlig prices track <query>'")
-        return
-
-    click.echo()
-    click.echo(f"🏷️  PRICE ALERTS ({len(alerts)} products on sale)")
-    click.echo("=" * 60)
-
-    for alert in alerts:
-        lowest = "🔥 LOWEST!" if alert.is_lowest else ""
-        click.echo(f"\n  {alert.product_name[:45]}")
-        click.echo(f"    Now: {alert.current_price:.2f} DKK (avg: {alert.avg_price:.2f} DKK)")
-        click.echo(f"    💰 {alert.discount_percent:.1f}% off {lowest}")
-
-    click.echo()
-
-
-@prices.command("status")
-def prices_status():
-    """Show price tracking status."""
-    tracker = get_tracker()
-
-    product_count = tracker.get_tracked_count()
-    price_count = tracker.get_price_count()
-
-    click.echo()
-    click.echo("PRICE TRACKING STATUS")
-    click.echo("=" * 40)
-    click.echo(f"  Products tracked: {product_count}")
-    click.echo(f"  Price records: {price_count}")
-    click.echo()
-
-    if product_count == 0:
-        click.echo("Start tracking prices with: nemlig prices track <query>")
-
-
-@prices.command("clear")
-@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
-@click.option("--old-only", is_flag=True, help="Only clear records older than 90 days")
-def prices_clear(yes: bool, old_only: bool):
-    """Clear price tracking data."""
-    tracker = get_tracker()
-
-    if old_only:
-        if not yes:
-            if not click.confirm("Remove price records older than 90 days?"):
-                click.echo("Cancelled.")
-                return
-        count = tracker.clear_old_prices(days=90)
-        click.echo(f"✓ Removed {count} old price records")
-    else:
-        if not yes:
-            if not click.confirm("Clear ALL price tracking data?"):
-                click.echo("Cancelled.")
-                return
-        tracker.clear_all()
-        click.echo("✓ All price data cleared")
 
 
 # ============================================================================
