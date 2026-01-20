@@ -104,9 +104,9 @@ uv run nemlig search "mælk"
 uv run nemlig parse URL
 uv run nemlig parse --text "2 eggs, 100g flour, milk"
 
-# Manage favorites (saved recipes)
-uv run nemlig favorites list
-uv run nemlig favorites order "saved-name"
+# Export shopping list to file
+uv run nemlig export URL shopping-list.md
+uv run nemlig export URL list.pdf --organic
 ```
 
 ---

@@ -11,7 +11,6 @@ A CLI tool that parses recipes from URLs or text, matches ingredients to product
 - **Pantry Check**: Identifies common household items (salt, oil, etc.) so you don't buy what you have
 - **Dietary Filters**: Filter for lactose-free, gluten-free, or vegan products
 - **Interactive Review**: TUI for reviewing and swapping product matches before checkout
-- **Favorites**: Save recipes locally for quick re-ordering
 - **Export**: Shopping lists to JSON, Markdown, or PDF
 
 ## Installation
@@ -48,8 +47,8 @@ See [QUICKSTART.md](QUICKSTART.md) for more examples.
 | `nemlig add` | Parse recipes/items and add to cart |
 | `nemlig parse` | Parse recipe from URL or text without adding to cart |
 | `nemlig search QUERY` | Search Nemlig products |
-| `nemlig favorites` | Manage saved recipes |
 | `nemlig pantry` | Manage household pantry items |
+| `nemlig export` | Export shopping list to file |
 
 ## Usage Examples
 
@@ -118,22 +117,6 @@ uv run nemlig pantry defaults
 uv run nemlig pantry clear
 ```
 
-### Favorites
-
-```bash
-# List saved favorites
-uv run nemlig favorites list
-
-# Save a recipe
-uv run nemlig favorites save "sunday-dinner" URL
-
-# Quick re-order
-uv run nemlig favorites order "sunday-dinner"
-
-# Re-order with scaling
-uv run nemlig favorites order "sunday-dinner" --scale 2
-```
-
 ## Configuration
 
 Credentials can be provided via:
@@ -148,8 +131,7 @@ Credentials can be provided via:
 
 Configuration files are stored in `~/.nemlig-shopper/`:
 - `credentials.json` - Login credentials (chmod 600)
-- `favorites.json` - Saved recipes
-- `pantry.json` - Custom pantry items
+- `pantry.txt` - Pantry items (one per line, edit directly or via CLI)
 
 ## Supported Recipe Sites
 

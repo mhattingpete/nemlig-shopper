@@ -117,7 +117,8 @@ Follow conventional commits:
 | `recipe_parser.py` | Recipe parsing from URLs/text |
 | `scaler.py` | Recipe quantity scaling |
 | `matcher.py` | Ingredient-to-product matching |
-| `favorites.py` | Recipe persistence |
+| `pantry.py` | Pantry item management |
+| `preference_engine.py` | Dietary/allergy filtering |
 | `config.py` | Configuration management |
 
 ### Data Flow
