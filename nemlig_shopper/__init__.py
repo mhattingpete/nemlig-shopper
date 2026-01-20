@@ -1,6 +1,6 @@
 """Nemlig Shopper - Recipe-to-Cart CLI Tool for Nemlig.com."""
 
-__version__ = "1.0.0"
+__version__ = "0.1.0"
 
 from .api import NemligAPI, NemligAPIError
 from .matcher import ProductMatch, match_ingredients
