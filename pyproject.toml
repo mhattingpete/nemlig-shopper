@@ -29,6 +29,7 @@ dependencies = [
     "textual>=0.50.0",
     "httpx>=0.28.1",
     "beautifulsoup4>=4.14.3",
+    "rapidfuzz>=3.14.3",
 ]
 
 [project.scripts]

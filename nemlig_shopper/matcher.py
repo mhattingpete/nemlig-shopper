@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Any
 
+from rapidfuzz import fuzz
+
 from .api import NemligAPI, NemligAPIError
 from .preference_engine import (
     check_allergy_safety,
@@ -39,6 +41,68 @@ def is_organic_product(product: dict[str, Any]) -> bool:
     return False
 
 
+def fuzzy_score(query: str, product_name: str) -> int:
+    """Calculate fuzzy similarity score between query and product name.
+
+    Uses token-based and partial matching to handle:
+    - Word order differences ("chicken breast" → "bryst af kylling")
+    - Substring matches ("tomat" → "flåede tomater")
+    - Minor typos ("tomatoe" → "tomater")
+
+    Args:
+        query: The search query or ingredient name
+        product_name: The product name to compare against
+
+    Returns:
+        Score boost (0-50) based on fuzzy similarity
+    """
+    query_lower = query.lower()
+    name_lower = product_name.lower()
+
+    # Token set ratio - handles multi-word matching regardless of order
+    token_score = fuzz.token_set_ratio(query_lower, name_lower)
+
+    # Partial ratio - handles substring matching
+    partial_score = fuzz.partial_ratio(query_lower, name_lower)
+
+    # Weighted combination (token matching slightly more important)
+    combined = token_score * 0.6 + partial_score * 0.4
+
+    # Threshold-based boosting to avoid false positives
+    if combined >= 75:
+        return int(combined * 0.5)  # Max +50 boost
+    elif combined >= 60:
+        return int(combined * 0.25)  # Max +25 boost
+    return 0
+
+
+def match_compound_word(query: str, product_name: str, translate_func) -> bool:
+    """Check if query words form a compound in product name.
+
+    Danish uses compound words heavily (e.g., "kyllingebryst" not "kylling bryst").
+    This checks if translated words combine to match the product.
+
+    Args:
+        query: Multi-word query (e.g., "chicken breast")
+        product_name: Product name to check against
+        translate_func: Function to translate words to Danish
+
+    Returns:
+        True if compound word match found
+    """
+    words = query.lower().split()
+    if len(words) < 2:
+        return False
+
+    name_lower = product_name.lower()
+
+    # Translate each word and check if compound exists
+    translated = [translate_func(w) or w for w in words]
+    compound = "".join(translated)
+
+    return compound in name_lower or name_lower.startswith(compound)
+
+
 # English to Danish translations for common ingredients
 INGREDIENT_TRANSLATIONS: dict[str, str] = {
     # Vegetables
@@ -64,6 +128,18 @@ INGREDIENT_TRANSLATIONS: dict[str, str] = {
     "leek": "porre",
     "shallot": "skalotteløg",
     "shallots": "skalotteløg",
+    "spring onion": "forårsløg",
+    "spring onions": "forårsløg",
+    "green onion": "forårsløg",
+    "green onions": "forårsløg",
+    "zucchini": "squash",
+    "eggplant": "aubergine",
+    "aubergine": "aubergine",
+    "corn": "majs",
+    "sweet corn": "majs",
+    "peas": "ærter",
+    "green beans": "grønne bønner",
+    "asparagus": "asparges",
     # Dairy
     "milk": "mælk",
     "butter": "smør",
@@ -73,6 +149,13 @@ INGREDIENT_TRANSLATIONS: dict[str, str] = {
     "eggs": "æg",
     "yogurt": "yoghurt",
     "sour cream": "creme fraiche",
+    "heavy cream": "piskefløde",
+    "whipping cream": "piskefløde",
+    "cream cheese": "flødeost",
+    "cottage cheese": "hytteost",
+    "parmesan": "parmesan",
+    "mozzarella": "mozzarella",
+    "feta": "feta",
     # Meat & Fish
     "chicken": "kylling",
     "beef": "oksekød",
@@ -84,6 +167,22 @@ INGREDIENT_TRANSLATIONS: dict[str, str] = {
     "sausage": "pølse",
     "ground beef": "hakket oksekød",
     "ground pork": "hakket svinekød",
+    "minced meat": "hakket kød",
+    "minced beef": "hakket oksekød",
+    "chicken breast": "kyllingebryst",
+    "breast": "bryst",  # For compound word matching
+    "chicken thigh": "kyllingelår",
+    "thigh": "lår",  # For compound word matching
+    "chicken thighs": "kyllingelår",
+    "pork chop": "svinekotelet",
+    "pork chops": "svinekoteletter",
+    "lamb": "lam",
+    "duck": "and",
+    "turkey": "kalkun",
+    "shrimp": "rejer",
+    "prawns": "rejer",
+    "cod": "torsk",
+    "tuna": "tun",
     # Pantry
     "flour": "mel",
     "sugar": "sukker",
@@ -95,6 +194,25 @@ INGREDIENT_TRANSLATIONS: dict[str, str] = {
     "bread": "brød",
     "vinegar": "eddike",
     "soy sauce": "sojasauce",
+    "all-purpose flour": "hvedemel",
+    "plain flour": "hvedemel",
+    "bread crumbs": "rasp",
+    "breadcrumbs": "rasp",
+    "panko": "panko",
+    "baking powder": "bagepulver",
+    "baking soda": "natron",
+    "cornstarch": "majsstivelse",
+    "corn starch": "majsstivelse",
+    "yeast": "gær",
+    "vanilla": "vanilje",
+    "vanilla extract": "vaniljeekstrakt",
+    "cocoa powder": "kakaopulver",
+    "coconut milk": "kokosmælk",
+    "coconut cream": "kokosfløde",
+    "tomato paste": "tomatpuré",
+    "tomato sauce": "tomatsauce",
+    "canned tomatoes": "flåede tomater",
+    "diced tomatoes": "hakkede tomater",
     # Fruits
     "lemon": "citron",
     "lemons": "citron",
@@ -435,6 +553,14 @@ def score_product_match(
     for word in ingredient_words:
         if len(word) > 2 and word in product_name:
             score += 30
+
+    # Fuzzy matching boost for near-matches (typos, partial matches)
+    fuzzy_boost = fuzzy_score(search_query, product_name)
+    score += fuzzy_boost
+
+    # Compound word matching for multi-word queries
+    if match_compound_word(search_query, product_name, translate_ingredient):
+        score += 40
 
     # Penalize if product name contains words suggesting it's a derivative product
     # (like "onion chips" when we want actual onions)
