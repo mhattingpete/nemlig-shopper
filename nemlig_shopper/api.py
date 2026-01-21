@@ -2,7 +2,7 @@
 
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import requests
@@ -40,11 +40,22 @@ class NemligAPI:
         self._access_token: str | None = None
         self._user_id: str | None = None
         self._combined_timestamp: str | None = None
-        self._timeslot: str = "2026011409-60-600"  # Default timeslot
-        self._timeslot_id: int = 2161377  # Default timeslot ID
+        self._timeslot: str = self._generate_default_timeslot()
+        self._timeslot_id: int = 0  # Will be calculated dynamically
         self._timeslot_reserved_at: datetime | None = None
         self._timeslot_expires_in_minutes: int = 0
         self._correlation_id: str | None = None
+
+    @staticmethod
+    def _generate_default_timeslot() -> str:
+        """Generate a default timeslot for tomorrow at 15:00.
+
+        The timeslot format is: YYYYMMDDHH-60-240
+        This ensures searches work even without login (anonymous users).
+        """
+        tomorrow = datetime.now() + timedelta(days=1)
+        # Format: YYYYMMDDHH where HH is the delivery hour (15:00)
+        return tomorrow.strftime("%Y%m%d") + "15-60-240"
 
     def _get_token(self) -> str | None:
         """Get JWT access token from Nemlig.com."""

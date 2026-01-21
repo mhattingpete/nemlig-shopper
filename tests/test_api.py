@@ -197,7 +197,8 @@ class TestSessionRefresh:
 
         # Should use default fallback values
         assert api_client._combined_timestamp == "AAAAAAAA-YFA_17hS"
-        assert api_client._timeslot == "2026011409-60-600"
+        # Timeslot is generated dynamically (tomorrow at 15:00)
+        assert api_client._timeslot.endswith("15-60-240")
 
 
 class TestProductSearch:
