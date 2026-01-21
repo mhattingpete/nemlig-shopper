@@ -598,17 +598,26 @@ def add_to_cart(
                         filtered.append(cons)
                     consolidated_to_match = filtered
 
-        # Determine organic preference
-        use_smart_organic = not no_organic and not budget
+        # Determine preference mode
+        # Default: auto_preference (budget for most items, smart-organic for produce)
+        # Explicit flags override auto mode
+        use_auto_preference = not organic and not budget and not no_organic
         use_prefer_organic = organic and not budget
+        use_smart_organic = False  # Only used when explicitly set or via auto
+        use_prefer_budget = budget
 
         # Show preference mode
         if use_prefer_organic:
             click.echo("\nMode: Always preferring organic products")
-        elif use_smart_organic:
-            click.echo(f"\nMode: Smart organic (prefer if within {organic_threshold:.0f} DKK)")
-        if budget:
-            click.echo("Mode: Preferring budget-friendly products")
+        elif use_auto_preference:
+            click.echo(
+                f"\nMode: Auto (budget for most, smart organic for produce within {organic_threshold:.0f} DKK)"
+            )
+        elif use_prefer_budget:
+            click.echo("\nMode: Preferring budget-friendly products")
+        elif no_organic:
+            click.echo("\nMode: Budget (organic preference disabled)")
+            use_prefer_budget = True
         if allergies or dietary:
             click.echo(f"Dietary filters: {', '.join(allergies + dietary)}")
 
@@ -623,12 +632,13 @@ def add_to_cart(
                 cons.total_quantity,
                 cons.unit,
                 prefer_organic=use_prefer_organic,
-                prefer_budget=budget,
+                prefer_budget=use_prefer_budget,
                 smart_organic=use_smart_organic,
                 organic_price_threshold=organic_threshold,
                 meal_context=meal_context,
                 allergies=allergies if allergies else None,
                 dietary=dietary if dietary else None,
+                auto_preference=use_auto_preference,
             )
             matches.append(match)
 

@@ -253,6 +253,129 @@ INGREDIENT_TRANSLATIONS: dict[str, str] = {
     "ketchup": "ketchup",
 }
 
+# Produce categories - use smart organic for these (vegetables and fruits)
+PRODUCE_CATEGORIES: set[str] = {
+    "Grønt",
+    "Frugt",
+}
+
+# Ingredient keywords that indicate produce (vegetables/fruits)
+PRODUCE_KEYWORDS: set[str] = {
+    # Vegetables (Danish) - includes common plural forms
+    "løg",
+    "hvidløg",
+    "tomat",
+    "tomater",
+    "kartoffel",
+    "kartofler",
+    "gulerod",
+    "gulerødder",
+    "selleri",
+    "salat",
+    "agurk",
+    "agurker",
+    "peber",
+    "peberfrugt",
+    "champignon",
+    "champignoner",
+    "spinat",
+    "broccoli",
+    "kål",
+    "porre",
+    "porrer",
+    "squash",
+    "aubergine",
+    "majs",
+    "ærter",
+    "asparges",
+    "forårsløg",
+    "skalotteløg",
+    "blomkål",
+    "grønkål",
+    "rosenkål",
+    # Vegetables (English)
+    "onion",
+    "garlic",
+    "tomato",
+    "potato",
+    "carrot",
+    "celery",
+    "lettuce",
+    "cucumber",
+    "pepper",
+    "mushroom",
+    "spinach",
+    "cabbage",
+    "leek",
+    "zucchini",
+    "eggplant",
+    "corn",
+    "peas",
+    "asparagus",
+    # Fruits (Danish) - includes common plural forms
+    "æble",
+    "æbler",
+    "banan",
+    "bananer",
+    "appelsin",
+    "appelsiner",
+    "citron",
+    "citroner",
+    "lime",
+    "pære",
+    "pærer",
+    "drue",
+    "druer",
+    "jordbær",
+    "hindbær",
+    "blåbær",
+    "melon",
+    "mango",
+    "ananas",
+    "avocado",
+    # Fruits (English)
+    "apple",
+    "banana",
+    "orange",
+    "lemon",
+    "pear",
+    "grape",
+    "strawberry",
+    "raspberry",
+    "blueberry",
+    "pineapple",
+    # Fresh herbs
+    "persille",
+    "basilikum",
+    "dild",
+    "purløg",
+    "koriander",
+    "mynte",
+    "parsley",
+    "basil",
+    "dill",
+    "chives",
+    "cilantro",
+    "mint",
+}
+
+
+def is_produce_ingredient(ingredient_name: str) -> bool:
+    """Check if an ingredient is fresh produce (vegetables/fruits).
+
+    These items benefit from smart organic preference rather than
+    pure budget preference.
+    """
+    name_lower = ingredient_name.lower()
+
+    # Check if any produce keyword is in the ingredient name
+    for keyword in PRODUCE_KEYWORDS:
+        if keyword in name_lower:
+            return True
+
+    return False
+
+
 # Categories that are typically not food items
 NON_FOOD_CATEGORIES: set[str] = {
     "Husholdning",
@@ -824,6 +947,7 @@ def match_ingredient(
     meal_context: str | None = None,
     allergies: list[str] | None = None,
     dietary: list[str] | None = None,
+    auto_preference: bool = True,
 ) -> ProductMatch:
     """
     Find matching products for a single ingredient.
@@ -835,6 +959,10 @@ def match_ingredient(
     - Available products over out-of-stock ones
     - Organic products (if prefer_organic=True or smart_organic=True)
     - Cheaper products (if prefer_budget=True)
+
+    When auto_preference=True (default), automatically determines the best mode:
+    - Produce (vegetables/fruits): uses smart_organic preference
+    - Everything else: uses budget preference
 
     When allergies or dietary restrictions are specified, uses a hybrid approach:
     1. Phase 1: Filter out unsafe products
@@ -854,10 +982,17 @@ def match_ingredient(
         meal_context: Optional meal context for better matching (e.g., "mexicansk")
         allergies: List of allergen types to avoid (e.g., ["lactose", "gluten"])
         dietary: List of dietary restrictions (e.g., ["vegan", "vegetarian"])
+        auto_preference: Auto-select smart_organic for produce, budget for others
 
     Returns:
         ProductMatch with best match and alternatives
     """
+    # Auto-determine preference mode if no explicit preference is set
+    if auto_preference and not prefer_organic and not prefer_budget and not smart_organic:
+        if is_produce_ingredient(ingredient_name):
+            smart_organic = True
+        else:
+            prefer_budget = True
     queries = generate_search_queries(ingredient_name, meal_context=meal_context)
     all_products: list[dict[str, Any]] = []
     used_query = queries[0] if queries else ingredient_name
@@ -1013,6 +1148,7 @@ def match_ingredients(
     meal_context: str | None = None,
     allergies: list[str] | None = None,
     dietary: list[str] | None = None,
+    auto_preference: bool = True,
 ) -> list[ProductMatch]:
     """
     Match all ingredients to products.
@@ -1028,6 +1164,7 @@ def match_ingredients(
         meal_context: Optional meal context for context-aware matching
         allergies: List of allergen types to avoid (e.g., ["lactose", "gluten"])
         dietary: List of dietary restrictions (e.g., ["vegan", "vegetarian"])
+        auto_preference: Auto-select smart_organic for produce, budget for others
 
     Returns:
         List of ProductMatch objects
@@ -1048,6 +1185,7 @@ def match_ingredients(
             meal_context=meal_context,
             allergies=allergies,
             dietary=dietary,
+            auto_preference=auto_preference,
         )
         matches.append(match)
 

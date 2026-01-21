@@ -391,6 +391,79 @@ def _extract_json_ld_recipe(soup: "BeautifulSoup") -> dict[str, Any] | None:
     return None
 
 
+def _extract_nuxt3_payload(soup: "BeautifulSoup") -> list[Ingredient] | None:
+    """Extract ingredients from Nuxt 3 __NUXT_DATA__ payload.
+
+    Nuxt 3 stores data as a JSON array where objects use numeric indices
+    as references to other array elements. This function resolves those
+    references to extract ingredient data.
+    """
+    import json
+
+    nuxt_script = soup.find("script", id="__NUXT_DATA__")
+    if not nuxt_script or not nuxt_script.string:
+        return None
+
+    try:
+        data = json.loads(nuxt_script.string)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(data, list):
+        return None
+
+    def resolve(idx: int | str | dict | list) -> Any:
+        """Resolve a Nuxt 3 payload reference."""
+        if isinstance(idx, int) and 0 <= idx < len(data):
+            val = data[idx]
+            if isinstance(val, dict):
+                return {k: resolve(v) for k, v in val.items()}
+            elif isinstance(val, list):
+                return [resolve(item) for item in val]
+            return val
+        elif isinstance(idx, dict):
+            return {k: resolve(v) for k, v in idx.items()}
+        elif isinstance(idx, list):
+            return [resolve(item) for item in idx]
+        return idx
+
+    # Find ingredient objects (dicts with 'ingredient' key pointing to an index)
+    ingredients: list[Ingredient] = []
+    seen_names: set[str] = set()
+
+    for item in data:
+        if isinstance(item, dict) and "ingredient" in item and "amountOfContent" in item:
+            try:
+                name = resolve(item["ingredient"])
+                amount = resolve(item.get("amountOfContent"))
+                unit = resolve(item.get("unitOfContent"))
+
+                if isinstance(name, str) and name and name.lower() not in seen_names:
+                    seen_names.add(name.lower())
+
+                    # Build original string
+                    parts = []
+                    if amount and amount != 0:
+                        parts.append(str(amount))
+                    if unit:
+                        parts.append(str(unit))
+                    parts.append(name)
+                    original = " ".join(parts)
+
+                    ingredients.append(
+                        Ingredient(
+                            original=original,
+                            name=name,
+                            quantity=float(amount) if amount else None,
+                            unit=str(unit) if unit else None,
+                        )
+                    )
+            except (TypeError, ValueError, IndexError):
+                continue
+
+    return ingredients if ingredients else None
+
+
 def _extract_nuxt_data(soup: "BeautifulSoup") -> dict[str, Any] | None:
     """Extract recipe data from Nuxt.js __NUXT_DATA__ or similar."""
     import json
@@ -466,6 +539,30 @@ def _scrape_recipe_fallback(url: str) -> Recipe:
         ingredients = [parse_ingredient_text(ing) for ing in raw_ingredients]
 
         return Recipe(title=title, ingredients=ingredients, servings=servings, source_url=url)
+
+    # Try Nuxt 3 payload extraction (sites like Rema1000)
+    nuxt3_ingredients = _extract_nuxt3_payload(soup)
+    if nuxt3_ingredients:
+        # Extract title from page
+        title = None
+        for selector in ["h1", ".recipe-title", ".entry-title", "[itemprop='name']"]:
+            elem = soup.select_one(selector)
+            if elem and elem.get_text(strip=True):
+                title = elem.get_text(strip=True)
+                break
+        if not title:
+            title = "Unknown Recipe"
+
+        # Try to find servings
+        servings = None
+        for text in soup.stripped_strings:
+            if any(word in text.lower() for word in ["personer", "servings", "portioner"]):
+                match = re.search(r"(\d+)", text)
+                if match:
+                    servings = int(match.group(1))
+                    break
+
+        return Recipe(title=title, ingredients=nuxt3_ingredients, servings=servings, source_url=url)
 
     # Extract title - try various common patterns
     title = None

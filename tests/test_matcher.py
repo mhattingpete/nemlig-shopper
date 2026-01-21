@@ -1,7 +1,8 @@
-"""Tests for fuzzy matching in the matcher module."""
+"""Tests for fuzzy matching and scoring in the matcher module."""
 
 from nemlig_shopper.matcher import (
     fuzzy_score,
+    is_produce_ingredient,
     match_compound_word,
     translate_ingredient,
 )
@@ -145,3 +146,47 @@ class TestTranslateIngredient:
         """Translations should be case-insensitive."""
         assert translate_ingredient("Chicken Breast") == "kyllingebryst"
         assert translate_ingredient("ZUCCHINI") == "squash"
+
+
+class TestIsProduceIngredient:
+    """Tests for is_produce_ingredient function."""
+
+    def test_vegetables_detected(self):
+        """Vegetables should be detected as produce."""
+        assert is_produce_ingredient("tomater") is True
+        assert is_produce_ingredient("gulerødder") is True
+        assert is_produce_ingredient("løg") is True
+        assert is_produce_ingredient("squash") is True
+        assert is_produce_ingredient("rød peberfrugt") is True
+
+    def test_fruits_detected(self):
+        """Fruits should be detected as produce."""
+        assert is_produce_ingredient("æbler") is True
+        assert is_produce_ingredient("bananer") is True
+        assert is_produce_ingredient("citron") is True
+        assert is_produce_ingredient("jordbær") is True
+
+    def test_herbs_detected(self):
+        """Fresh herbs should be detected as produce."""
+        assert is_produce_ingredient("persille") is True
+        assert is_produce_ingredient("basilikum") is True
+        assert is_produce_ingredient("dild") is True
+
+    def test_non_produce_not_detected(self):
+        """Non-produce items should not be detected."""
+        assert is_produce_ingredient("mælk") is False
+        assert is_produce_ingredient("kylling") is False
+        assert is_produce_ingredient("pasta") is False
+        assert is_produce_ingredient("mel") is False
+        assert is_produce_ingredient("spegepølse") is False
+
+    def test_case_insensitive(self):
+        """Detection should be case-insensitive."""
+        assert is_produce_ingredient("TOMATER") is True
+        assert is_produce_ingredient("Løg") is True
+
+    def test_partial_match(self):
+        """Should match when keyword is part of ingredient name."""
+        assert is_produce_ingredient("rød løg") is True
+        assert is_produce_ingredient("store tomater") is True
+        assert is_produce_ingredient("frisk persille") is True
