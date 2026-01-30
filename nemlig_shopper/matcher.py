@@ -251,6 +251,27 @@ INGREDIENT_TRANSLATIONS: dict[str, str] = {
     "mustard": "sennep",
     "mayonnaise": "mayonnaise",
     "ketchup": "ketchup",
+    # Vegan products
+    "vegan butter": "smørbar",
+    "vegansk smør": "smørbar",
+    "vegan yogurt": "soyaprodukt",
+    "vegansk yoghurt": "soyaprodukt",
+    "plant yogurt": "soyaprodukt",
+    "oat milk": "havredrik",
+    "almond milk": "mandeldrik",
+    "soy milk": "sojadrik",
+    # Household items
+    "hand soap": "håndsæbe",
+    "håndsæbe": "håndsæbe",
+    "toilet paper": "toiletpapir",
+    "paper towels": "køkkenrulle",
+    # Snacks & drinks
+    "crispbread": "knækbrød",
+    "knækbrød": "knækbrød",
+    "sparkling water": "danskvand",
+    "soda": "sodavand",
+    "smoothie": "smoothie",
+    "smoothies": "smoothie",
 }
 
 # Produce categories - use smart organic for these (vegetables and fruits)
@@ -397,6 +418,8 @@ SEARCH_TERM_IMPROVEMENTS: dict[str, str] = {
     # Vegetables - prefer specific varieties
     "tomat": "cherrytomater",
     "tomater": "cherrytomater",
+    # Fresh herbs/produce - avoid tea and processed products
+    "ingefær": "ingefær øko",
     # Tortillas/wraps
     "madpandekager": "tortilla wraps",
     "tortilla": "tortilla wraps",
@@ -404,11 +427,16 @@ SEARCH_TERM_IMPROVEMENTS: dict[str, str] = {
     "revet ost": "revet mozzarella",
     # Salsa - default to taco salsa
     "salsa": "taco salsa",
-    # Bread
+    # Bread and crispbread
     "morgenbrød": "toastbrød",
     "rugbrød": "rugbrød øko",
+    "knækbrød havsalt": "knækbrød havsalt",
+    "knækbrød": "knækbrød",
     # Dairy
     "mælk": "letmælk",
+    # Vegan products
+    "vegansk smør": "smørbar øko",
+    "vegansk yoghurt": "soyaprodukt alpro",
     # Meat
     "kylling": "kyllingebrystfilet",
     "kyllingebryst": "kyllingebrystfilet",
@@ -753,6 +781,32 @@ def score_product_match(
     ):
         score -= 100
 
+    # Penalize tea/beverage products when searching for fresh ingredients
+    # e.g. "ingefær te" when searching for fresh ginger
+    fresh_ingredient_terms = {
+        "ingefær",
+        "citron",
+        "mynte",
+        "kanel",
+        "kardemomme",
+        "lakrids",
+        "kamille",
+        "pebermynte",
+    }
+    tea_beverage_indicators = {"te", "urtete", "the", "tea", "infusion", "drik"}
+    if any(term in ingredient_lower for term in fresh_ingredient_terms):
+        if any(indicator in product_name for indicator in tea_beverage_indicators):
+            # Don't penalize if user is actually searching for tea
+            if "te" not in ingredient_lower and "tea" not in ingredient_lower:
+                score -= 80
+
+    # Boost products where first word of query matches first word of product
+    # This helps "knækbrød havsalt" match "Knækbrød Sport" better than "Salt"
+    query_first_word = query_lower.split()[0] if query_lower else ""
+    product_first_word = product_name.split()[0] if product_name else ""
+    if query_first_word and product_first_word and query_first_word == product_first_word:
+        score += 60
+
     return score
 
 
@@ -1010,7 +1064,10 @@ def match_ingredient(
                         seen_ids.add(product_id)
                         # Store the query that found this product for scoring
                         product["_search_query"] = query
-                        # Mark products from context-specific query (first query)
+                        # Mark products from the primary query (first query)
+                        # These should be prioritized as they match the intended search
+                        product["_is_primary_query"] = query_idx == 0
+                        # Mark products from context-specific query
                         product["_is_context_match"] = query_idx == 0 and meal_context is not None
                         all_products.append(product)
                 if not used_query or used_query == ingredient_name:
@@ -1035,6 +1092,7 @@ def match_ingredient(
                     prefer_budget=prefer_budget,
                 )
                 + product.get("_organic_bonus", 0)  # Add smart organic bonus
+                + (150 if product.get("_is_primary_query") else 0)  # Boost primary query matches
                 + (200 if product.get("_is_context_match") else 0),  # Boost context matches
             )
             for product in all_products
@@ -1046,6 +1104,7 @@ def match_ingredient(
         for product, _score in scored_products:
             product.pop("_search_query", None)
             product.pop("_organic_bonus", None)
+            product.pop("_is_primary_query", None)
             product.pop("_is_context_match", None)
             sorted_products.append(product)
 

@@ -219,6 +219,16 @@ def parse_quantity(text: str) -> tuple[float | None, str]:
             # Check for mixed number (e.g., "1½")
             return value, remaining
 
+    # Handle "Nx" or "xN" patterns (e.g., "3x", "x3", "3 x")
+    multiplier_match = re.match(r"^(\d+)\s*[xX]\s+", text)
+    if multiplier_match:
+        return float(multiplier_match.group(1)), text[multiplier_match.end() :].strip()
+
+    # Handle "x N" at start (less common)
+    multiplier_match2 = re.match(r"^[xX]\s*(\d+)\s+", text)
+    if multiplier_match2:
+        return float(multiplier_match2.group(1)), text[multiplier_match2.end() :].strip()
+
     # Match patterns like "1", "1.5", "1,5" (Danish), "1 1/2", "1-2" (range)
     # Note: [\.,] matches both period and comma as decimal separator
     pattern = r"^(\d+(?:[\.,]\d+)?(?:\s*[-–]\s*\d+(?:[\.,]\d+)?)?(?:\s+\d+/\d+)?|\d+/\d+)"

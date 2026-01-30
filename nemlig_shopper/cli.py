@@ -23,7 +23,7 @@ from .pantry import (
     load_pantry,
     remove_from_pantry,
 )
-from .pantry_tui import interactive_pantry_check, simple_pantry_prompt
+from .pantry_tui import PantryCheckResult, interactive_pantry_check, simple_pantry_prompt
 from .planner import consolidate_ingredients
 from .preferences import (
     PreferencesError,
@@ -359,10 +359,26 @@ def cart():
 @click.option("--vegan", is_flag=True, help="Filter for vegan products")
 @click.option("--interactive", "-i", is_flag=True, help="Interactive review with TUI")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
-@click.option("--skip-pantry-check", is_flag=True, help="Skip pantry item check")
+@click.option("--skip-pantry-check", is_flag=True, help="Skip pantry item check entirely")
+@click.option(
+    "--exclude-all-pantry", is_flag=True, help="Auto-exclude all pantry items (non-interactive)"
+)
+@click.option(
+    "--include-all-pantry", is_flag=True, help="Auto-include all pantry items (non-interactive)"
+)
 @click.option("--remember-pantry", is_flag=True, help="Remember excluded items as pantry")
 @click.option("--skip-ambiguous-check", is_flag=True, help="Skip prompts for ambiguous items")
 @click.option("--dry-run", is_flag=True, help="Show what would be added without adding to cart")
+@click.option(
+    "--discover-prompts",
+    is_flag=True,
+    help="Output JSON with all interactive prompts (for LLM integration)",
+)
+@click.option(
+    "--prompt-answers",
+    type=str,
+    help="JSON string with answers to prompts (for LLM integration)",
+)
 def add_to_cart(
     urls: tuple[str, ...],
     input_text: str | None,
@@ -379,9 +395,13 @@ def add_to_cart(
     interactive: bool,
     yes: bool,
     skip_pantry_check: bool,
+    exclude_all_pantry: bool,
+    include_all_pantry: bool,
     remember_pantry: bool,
     skip_ambiguous_check: bool,
     dry_run: bool,
+    discover_prompts: bool,
+    prompt_answers: str | None,
 ):
     """Parse recipes and/or items and add matched products to cart.
 
@@ -415,6 +435,24 @@ def add_to_cart(
     \b
         # Scale a single recipe
         nemlig add https://recipe.com --scale 2
+
+    LLM Integration (non-interactive mode):
+
+    \b
+        # Step 1: Discover prompts that would be asked
+        nemlig add --text "mælk, frugt, grønt" --discover-prompts
+
+    \b
+        # Step 2: Run with answers (JSON format)
+        nemlig add --text "mælk, frugt, grønt" --yes --dry-run \\
+          --prompt-answers '{"pantry_items": [], "ambiguous_items": {"frugt": "æbler", "grønt": "skip"}}'
+
+    Prompt answer format:
+      - pantry_items: list of item names to BUY (others excluded)
+      - ambiguous_items: dict mapping item name to action:
+          "skip" = remove from list
+          "keep" = search as-is
+          "<term>" = replace with search term
     """
     api = get_api()
 
@@ -527,58 +565,164 @@ def add_to_cart(
         if len(all_urls) > 1 or manual_items:
             click.echo(f"\nConsolidated to {len(consolidated)} unique ingredients")
 
-        # Pantry check
-        consolidated_to_match = consolidated
+        # Validate mutually exclusive pantry options
+        if exclude_all_pantry and include_all_pantry:
+            click.echo("✗ Cannot use both --exclude-all-pantry and --include-all-pantry", err=True)
+            raise SystemExit(1)
+
+        # Parse prompt answers if provided
+        import json
+
+        answers: dict = {}
+        if prompt_answers:
+            try:
+                answers = json.loads(prompt_answers)
+            except json.JSONDecodeError as e:
+                click.echo(f"✗ Invalid JSON in --prompt-answers: {e}", err=True)
+                raise SystemExit(1) from None
+
+        # Collect prompts for discovery mode
+        prompts_to_ask: list[dict] = []
+
+        # Identify pantry candidates
+        pantry_candidates: list = []
         if not skip_pantry_check:
             pantry_items = load_pantry(PANTRY_FILE)
             pantry_candidates, _ = identify_pantry_items(consolidated, pantry_items)
 
-            if pantry_candidates:
-                click.echo(f"\nFound {len(pantry_candidates)} potential pantry items.")
-
-                if interactive:
-                    title = recipes[0].title if len(recipes) == 1 else "Shopping List"
-                    pantry_result = interactive_pantry_check(
-                        pantry_candidates, f"Pantry Check - {title}"
-                    )
-                else:
-                    pantry_result = simple_pantry_prompt(pantry_candidates)
-
-                if not pantry_result.confirmed:
-                    click.echo("Cancelled.")
-                    return
-
-                if pantry_result.excluded_items:
-                    click.echo(f"Excluding {len(pantry_result.excluded_items)} pantry items.")
-                    if remember_pantry:
-                        add_to_pantry(pantry_result.excluded_items, PANTRY_FILE)
-                        click.echo("✓ Saved excluded items to your pantry")
-
-                    consolidated_to_match = filter_pantry_items(
-                        consolidated, pantry_result.excluded_items
-                    )
-
-        # Handle ambiguous terms
+        # Identify ambiguous items (need to check against consolidated first)
+        consolidated_to_match = consolidated
+        ambiguous_items: list = []
         if not skip_ambiguous_check and not yes:
+            ambiguous_items = [c for c in consolidated if is_ambiguous_term(c.name)]
+
+        # Discovery mode: output all prompts as JSON and exit
+        if discover_prompts:
+            if pantry_candidates:
+                pantry_prompt = {
+                    "id": "pantry_items",
+                    "type": "multi_select",
+                    "question": "Which of these pantry items do you need to BUY? (Items not selected will be excluded from shopping list)",
+                    "items": [
+                        {
+                            "name": c.name,
+                            "quantity": c.total_quantity,
+                            "unit": c.unit,
+                        }
+                        for c in pantry_candidates
+                    ],
+                    "default": [],  # Default: exclude all (user has them)
+                }
+                prompts_to_ask.append(pantry_prompt)
+
+            if ambiguous_items:
+                ambiguous_prompt = {
+                    "id": "ambiguous_items",
+                    "type": "ambiguous_resolution",
+                    "question": "These items are ambiguous. For each, specify action: 'skip', 'keep', or a replacement search term.",
+                    "items": [
+                        {
+                            "name": c.name,
+                            "quantity": c.total_quantity,
+                            "unit": c.unit,
+                        }
+                        for c in ambiguous_items
+                    ],
+                    "example_answer": {"frugt": "æbler", "grønt": "skip", "dressing": "keep"},
+                }
+                prompts_to_ask.append(ambiguous_prompt)
+
+            # Output prompts as JSON and exit
+            click.echo(json.dumps({"prompts": prompts_to_ask}, indent=2, ensure_ascii=False))
+            return
+
+        # Pantry check (with answer support)
+        if not skip_pantry_check and pantry_candidates:
+            click.echo(f"\nFound {len(pantry_candidates)} potential pantry items.")
+
+            # Check for answer in prompt_answers
+            if "pantry_items" in answers:
+                # Items in the answer list are ones to BUY (include)
+                items_to_buy = set(answers["pantry_items"])
+                excluded = [c.name for c in pantry_candidates if c.name not in items_to_buy]
+                included = [c.name for c in pantry_candidates if c.name in items_to_buy]
+                pantry_result = PantryCheckResult(
+                    confirmed=True,
+                    excluded_items=excluded,
+                    included_items=included,
+                )
+            elif exclude_all_pantry:
+                # Auto-exclude all pantry items (user has them all)
+                pantry_result = PantryCheckResult(
+                    confirmed=True,
+                    excluded_items=[c.name for c in pantry_candidates],
+                    included_items=[],
+                )
+            elif include_all_pantry:
+                # Auto-include all pantry items (buy them all)
+                pantry_result = PantryCheckResult(
+                    confirmed=True,
+                    excluded_items=[],
+                    included_items=[c.name for c in pantry_candidates],
+                )
+            elif interactive:
+                title = recipes[0].title if len(recipes) == 1 else "Shopping List"
+                pantry_result = interactive_pantry_check(
+                    pantry_candidates, f"Pantry Check - {title}"
+                )
+            else:
+                pantry_result = simple_pantry_prompt(pantry_candidates)
+
+            if not pantry_result.confirmed:
+                click.echo("Cancelled.")
+                return
+
+            if pantry_result.excluded_items:
+                click.echo(f"Excluding {len(pantry_result.excluded_items)} pantry items.")
+                if remember_pantry:
+                    add_to_pantry(pantry_result.excluded_items, PANTRY_FILE)
+                    click.echo("✓ Saved excluded items to your pantry")
+
+                consolidated_to_match = filter_pantry_items(
+                    consolidated, pantry_result.excluded_items
+                )
+
+        # Handle ambiguous terms (with answer support)
+        # Process if: not skipped AND (has answers OR not auto-confirmed)
+        has_ambiguous_answers = "ambiguous_items" in answers
+        if not skip_ambiguous_check and (has_ambiguous_answers or not yes):
+            # Re-check ambiguous items after pantry filtering
             ambiguous_items = [c for c in consolidated_to_match if is_ambiguous_term(c.name)]
             if ambiguous_items:
-                click.echo(f"\n⚠ Found {len(ambiguous_items)} ambiguous item(s):")
                 items_to_skip = []
                 items_to_replace = {}
 
-                for item in ambiguous_items:
-                    click.echo(f"\n  '{item.name}' is ambiguous.")
-                    click.echo("  Options: 1=Skip, 2=Specify replacement, 3=Keep as-is")
-                    choice = click.prompt(
-                        "  Choice", type=click.Choice(["1", "2", "3"]), default="3"
-                    )
+                # Check for answer in prompt_answers
+                if has_ambiguous_answers:
+                    ambiguous_answers = answers["ambiguous_items"]
+                    for item in ambiguous_items:
+                        action = ambiguous_answers.get(item.name, "keep")
+                        if action == "skip":
+                            items_to_skip.append(item.name.lower())
+                        elif action != "keep":
+                            # It's a replacement term
+                            items_to_replace[item.name.lower()] = action
+                else:
+                    # Interactive mode
+                    click.echo(f"\n⚠ Found {len(ambiguous_items)} ambiguous item(s):")
+                    for item in ambiguous_items:
+                        click.echo(f"\n  '{item.name}' is ambiguous.")
+                        click.echo("  Options: 1=Skip, 2=Specify replacement, 3=Keep as-is")
+                        choice = click.prompt(
+                            "  Choice", type=click.Choice(["1", "2", "3"]), default="3"
+                        )
 
-                    if choice == "1":
-                        items_to_skip.append(item.name.lower())
-                    elif choice == "2":
-                        replacement = click.prompt("  Search for instead")
-                        if replacement:
-                            items_to_replace[item.name.lower()] = replacement
+                        if choice == "1":
+                            items_to_skip.append(item.name.lower())
+                        elif choice == "2":
+                            replacement = click.prompt("  Search for instead")
+                            if replacement:
+                                items_to_replace[item.name.lower()] = replacement
 
                 if items_to_skip or items_to_replace:
                     from .planner import ConsolidatedIngredient

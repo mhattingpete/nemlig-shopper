@@ -89,24 +89,33 @@ def get_default_pantry_items() -> list[str]:
 
 
 def _is_pantry_item(ingredient_name: str, pantry_items: set[str]) -> bool:
-    """Check if an ingredient matches any pantry item."""
+    """Check if an ingredient matches any pantry item.
+
+    Uses word boundary matching to avoid false positives like
+    "salt" matching "havsalt" (sea salt) in "knækbrød havsalt".
+    """
+
     normalized = _normalize(ingredient_name)
+    words = normalized.split()
 
     # Exact match
     if normalized in pantry_items:
         return True
 
-    # Check if any pantry item is contained in the ingredient name
+    # Check if any multi-word pantry item is contained in the ingredient name
     # e.g., "olive oil" matches "extra virgin olive oil"
     for item in pantry_items:
         item_lower = item.lower()
-        if item_lower in normalized or normalized in item_lower:
-            return True
+        if " " in item_lower:
+            # Multi-word items: allow substring matching
+            if item_lower in normalized or normalized in item_lower:
+                return True
 
     # Check individual words for common items like "salt", "pepper"
-    words = normalized.split()
+    # Must match as a complete word, not as part of a compound word
     single_word_pantry = {p.lower() for p in pantry_items if " " not in p}
     for word in words:
+        # Exact word match only (not substring of compound words)
         if word in single_word_pantry:
             return True
 
