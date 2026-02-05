@@ -1,7 +1,7 @@
 """Shared fixtures for nemlig-shopper tests."""
 
 import pytest
-import responses
+import respx
 
 from nemlig_shopper.api import NemligAPI
 from nemlig_shopper.config import API_BASE_URL
@@ -11,10 +11,10 @@ SEARCH_GATEWAY_URL = "https://webapi.prod.knl.nemlig.it/searchgateway/api"
 
 
 @pytest.fixture
-def mock_responses():
-    """Activate responses mock for HTTP requests."""
-    with responses.RequestsMock() as rsps:
-        yield rsps
+def mock_httpx():
+    """Activate respx mock for HTTP requests."""
+    with respx.mock(assert_all_called=False) as respx_mock:
+        yield respx_mock
 
 
 @pytest.fixture
@@ -126,35 +126,17 @@ def mock_cart_response():
 
 @pytest.fixture
 def setup_session_mocks(
-    mock_responses,
+    mock_httpx,
     mock_token_response,
     mock_app_settings_response,
     mock_user_response,
     mock_timeslot_response,
 ):
     """Set up all mocks needed for session initialization."""
-    mock_responses.add(
-        responses.GET,
-        f"{API_BASE_URL}/Token",
-        json=mock_token_response,
-        status=200,
+    mock_httpx.get(f"{API_BASE_URL}/Token").respond(json=mock_token_response)
+    mock_httpx.get(f"{API_BASE_URL}/v2/AppSettings/Website").respond(
+        json=mock_app_settings_response
     )
-    mock_responses.add(
-        responses.GET,
-        f"{API_BASE_URL}/v2/AppSettings/Website",
-        json=mock_app_settings_response,
-        status=200,
-    )
-    mock_responses.add(
-        responses.GET,
-        f"{API_BASE_URL}/user/GetCurrentUser",
-        json=mock_user_response,
-        status=200,
-    )
-    mock_responses.add(
-        responses.GET,
-        f"{API_BASE_URL}/Order/DeliverySpot",
-        json=mock_timeslot_response,
-        status=200,
-    )
-    return mock_responses
+    mock_httpx.get(f"{API_BASE_URL}/user/GetCurrentUser").respond(json=mock_user_response)
+    mock_httpx.get(f"{API_BASE_URL}/Order/DeliverySpot").respond(json=mock_timeslot_response)
+    return mock_httpx

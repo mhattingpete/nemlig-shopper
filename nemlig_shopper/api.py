@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-import requests
+import httpx
 
 from .config import API_BASE_URL
 
@@ -23,9 +23,8 @@ class NemligAPI:
     """Client for interacting with Nemlig.com's API."""
 
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
+        self.client = httpx.Client(
+            headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json, text/plain, */*",
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
@@ -33,7 +32,9 @@ class NemligAPI:
                 "version": "11.201.0",
                 "platform": "web",
                 "device-size": "desktop",
-            }
+            },
+            follow_redirects=True,
+            timeout=30.0,
         )
         self._logged_in = False
         self._access_token: str | None = None
@@ -42,6 +43,11 @@ class NemligAPI:
         self._timeslot: str = self._generate_default_timeslot()
         self._timeslot_id: int = 0
         self._correlation_id: str | None = None
+
+    def __del__(self):
+        """Close the HTTP client on cleanup."""
+        if hasattr(self, "client"):
+            self.client.close()
 
     @staticmethod
     def _generate_default_timeslot() -> str:
@@ -58,49 +64,56 @@ class NemligAPI:
         """Get JWT access token from Nemlig.com."""
         url = f"{API_BASE_URL}/Token"
         try:
-            response = self.session.get(url)
+            response = self.client.get(url)
             response.raise_for_status()
             data = response.json()
             return data.get("access_token")
-        except requests.RequestException:
+        except (httpx.RequestError, httpx.HTTPStatusError):
+            return None
+        except ValueError:
+            # JSONDecodeError is a subclass of ValueError
             return None
 
     def _get_app_settings(self) -> dict[str, Any]:
         """Get app settings including timestamps."""
         url = f"{API_BASE_URL}/v2/AppSettings/Website"
         try:
-            response = self.session.get(url)
+            response = self.client.get(url)
             response.raise_for_status()
             return response.json()
-        except requests.RequestException:
+        except httpx.RequestError:
+            return {}
+        except httpx.HTTPStatusError:
             return {}
 
     def _get_current_user(self) -> dict[str, Any]:
         """Get current user info."""
         url = f"{API_BASE_URL}/user/GetCurrentUser"
         try:
-            response = self.session.get(url)
+            response = self.client.get(url)
             response.raise_for_status()
             data = response.json()
             # API might return a string or dict depending on auth state
             if isinstance(data, dict):
                 return data
             return {}
-        except requests.RequestException:
+        except httpx.RequestError:
+            return {}
+        except httpx.HTTPStatusError:
             return {}
 
     def _get_timeslot(self) -> tuple[str, int]:
         """Get current delivery timeslot and ID from Order/DeliverySpot."""
         url = f"{API_BASE_URL}/Order/DeliverySpot"
         try:
-            response = self.session.get(url)
+            response = self.client.get(url)
             response.raise_for_status()
             data = response.json()
             if isinstance(data, dict):
                 timeslot_utc = data.get("TimeslotUtc", self._timeslot)
                 timeslot_id = int(data.get("TimeslotId", self._timeslot_id))
                 return timeslot_utc, timeslot_id
-        except requests.RequestException:
+        except (httpx.RequestError, httpx.HTTPStatusError):
             pass
         return self._timeslot, self._timeslot_id
 
@@ -109,9 +122,9 @@ class NemligAPI:
         # Get JWT token
         self._access_token = self._get_token()
 
-        # Add Authorization header to session for all subsequent requests
+        # Add Authorization header to client for all subsequent requests
         if self._access_token:
-            self.session.headers.update({"Authorization": f"Bearer {self._access_token}"})
+            self.client.headers["Authorization"] = f"Bearer {self._access_token}"
 
         # Get app settings for timestamps
         settings = self._get_app_settings()
@@ -154,7 +167,7 @@ class NemligAPI:
         payload = {"Username": username, "Password": password}
 
         try:
-            response = self.session.post(url, json=payload)
+            response = self.client.post(url, json=payload)
             response.raise_for_status()
 
             data = response.json()
@@ -172,7 +185,9 @@ class NemligAPI:
             else:
                 raise NemligAPIError("Login failed: Invalid credentials")
 
-        except requests.RequestException as e:
+        except httpx.RequestError as e:
+            raise NemligAPIError(f"Login failed: {e}") from e
+        except httpx.HTTPStatusError as e:
             raise NemligAPIError(f"Login failed: {e}") from e
 
     def is_logged_in(self) -> bool:
@@ -256,9 +271,11 @@ class NemligAPI:
         }
 
         try:
-            # Use requests.get directly to avoid session's Content-Type header
+            # Use httpx.get directly to avoid client's Content-Type header
             # which causes 400 errors on the search gateway
-            response = requests.get(url, params=params, headers=self._get_gateway_headers())
+            response = httpx.get(
+                url, params=params, headers=self._get_gateway_headers(), timeout=30.0
+            )
             response.raise_for_status()
 
             data = response.json()
@@ -270,7 +287,7 @@ class NemligAPI:
                 products_list = products_data if isinstance(products_data, list) else []
             return self._parse_products(products_list, limit)
 
-        except requests.RequestException:
+        except (httpx.RequestError, httpx.HTTPStatusError):
             return []
 
     def _get_search_categories(self, query: str) -> list[dict[str, Any]]:
@@ -280,11 +297,11 @@ class NemligAPI:
         headers = self._get_gateway_headers()
 
         try:
-            response = self.session.get(url, params=params, headers=headers)
+            response = self.client.get(url, params=params, headers=headers)
             response.raise_for_status()
             data = response.json()
             return data.get("Categories", [])
-        except requests.RequestException:
+        except (httpx.RequestError, httpx.HTTPStatusError):
             return []
 
     def get_search_suggestions(self, query: str) -> dict[str, Any]:
@@ -305,14 +322,14 @@ class NemligAPI:
         headers = self._get_gateway_headers()
 
         try:
-            response = self.session.get(url, params=params, headers=headers)
+            response = self.client.get(url, params=params, headers=headers)
             response.raise_for_status()
             data = response.json()
             return {
                 "suggestions": data.get("Suggestions", []),
                 "categories": data.get("Categories", []),
             }
-        except requests.RequestException:
+        except (httpx.RequestError, httpx.HTTPStatusError):
             return {"suggestions": [], "categories": []}
 
     def _parse_products(self, products_data: list[dict], limit: int) -> list[dict[str, Any]]:
@@ -394,7 +411,7 @@ class NemligAPI:
         params = {"GetAsJson": "1"}
 
         try:
-            response = self.session.get(page_url, params=params)
+            response = self.client.get(page_url, params=params)
             response.raise_for_status()
 
             data = response.json()
@@ -404,7 +421,7 @@ class NemligAPI:
                 if item.get("ProductGroupId"):
                     return self._get_products_by_group_id(item["ProductGroupId"], limit)
 
-        except requests.RequestException:
+        except (httpx.RequestError, httpx.HTTPStatusError):
             pass
 
         return []
@@ -415,13 +432,13 @@ class NemligAPI:
         params = {"productGroupId": group_id, "sortorder": "default", "take": limit}
 
         try:
-            response = self.session.get(url, params=params, headers=self._get_correlation_headers())
+            response = self.client.get(url, params=params, headers=self._get_correlation_headers())
             response.raise_for_status()
 
             data = response.json()
             return self._parse_products(data.get("Products", []), limit)
 
-        except requests.RequestException:
+        except (httpx.RequestError, httpx.HTTPStatusError):
             return []
 
     def add_to_cart(self, product_id: int | str, quantity: int = 1) -> bool:
@@ -445,11 +462,13 @@ class NemligAPI:
         payload = {"ProductId": int(product_id), "Quantity": quantity}
 
         try:
-            response = self.session.post(url, json=payload)
+            response = self.client.post(url, json=payload)
             response.raise_for_status()
             return True
 
-        except requests.RequestException as e:
+        except httpx.RequestError as e:
+            raise NemligAPIError(f"Failed to add to cart: {e}") from e
+        except httpx.HTTPStatusError as e:
             raise NemligAPIError(f"Failed to add to cart: {e}") from e
 
     def add_multiple_to_cart(self, items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -493,11 +512,13 @@ class NemligAPI:
         url = f"{API_BASE_URL}/basket/GetBasket"
 
         try:
-            response = self.session.get(url)
+            response = self.client.get(url)
             response.raise_for_status()
             return response.json()
 
-        except requests.RequestException as e:
+        except httpx.RequestError as e:
+            raise NemligAPIError(f"Failed to get cart: {e}") from e
+        except httpx.HTTPStatusError as e:
             raise NemligAPIError(f"Failed to get cart: {e}") from e
 
     def clear_cart(self) -> bool:
@@ -508,9 +529,11 @@ class NemligAPI:
         url = f"{API_BASE_URL}/basket/ClearBasket"
 
         try:
-            response = self.session.post(url)
+            response = self.client.post(url)
             response.raise_for_status()
             return True
 
-        except requests.RequestException as e:
+        except httpx.RequestError as e:
+            raise NemligAPIError(f"Failed to clear cart: {e}") from e
+        except httpx.HTTPStatusError as e:
             raise NemligAPIError(f"Failed to clear cart: {e}") from e

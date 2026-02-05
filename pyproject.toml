@@ -21,7 +21,7 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
 ]
 dependencies = [
-    "requests>=2.28.0",
+    "httpx>=0.28.0",
     "recipe-scrapers>=14.0.0",
     "click>=8.0.0",
     "python-dotenv>=1.0.0",
@@ -46,7 +46,7 @@ packages = ["nemlig_shopper"]
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
-    "responses>=0.25.0",
+    "respx>=0.22.0",
     "ruff>=0.8.0",
     "ty>=0.0.1a0",
     "pre-commit>=4.0.0",

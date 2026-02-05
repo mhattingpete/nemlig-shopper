@@ -1,8 +1,7 @@
 """Tests for the NemligAPI client."""
 
+import httpx
 import pytest
-import responses
-from requests.exceptions import ConnectionError, Timeout
 
 from nemlig_shopper.api import NemligAPIError
 from nemlig_shopper.config import API_BASE_URL
@@ -16,7 +15,7 @@ class TestApiInitialization:
 
     def test_creates_session_with_required_headers(self, api_client):
         """Client should initialize with proper HTTP headers."""
-        headers = api_client.session.headers
+        headers = api_client.client.headers
         assert headers["Content-Type"] == "application/json"
         assert headers["User-Agent"].startswith("Mozilla/5.0")
         assert headers["platform"] == "web"
@@ -33,14 +32,12 @@ class TestAuthentication:
     """Tests for login/logout functionality."""
 
     def test_login_success(
-        self, mock_responses, api_client, mock_login_success_response, setup_session_mocks
+        self, mock_httpx, api_client, mock_login_success_response, setup_session_mocks
     ):
         """Successful login should set logged_in state and refresh session."""
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/login",
+        mock_httpx.post(f"{API_BASE_URL}/login").respond(
             json=mock_login_success_response,
-            status=200,
+            status_code=200,
         )
 
         result = api_client.login("test@example.com", "password123")
@@ -50,18 +47,16 @@ class TestAuthentication:
         assert api_client._access_token == "test-jwt-token-12345"
         assert api_client._user_id == "67890"
 
-    def test_login_invalid_credentials(self, mock_responses, api_client):
+    def test_login_invalid_credentials(self, mock_httpx, api_client):
         """Login with invalid credentials should raise NemligAPIError."""
         # Nemlig API returns 400 with ErrorCode for invalid credentials
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/login",
+        mock_httpx.post(f"{API_BASE_URL}/login").respond(
             json={
                 "Data": None,
                 "ErrorCode": 4,
                 "ErrorMessage": "E-mail og/eller password er ikke gyldig",
             },
-            status=400,
+            status_code=400,
         )
 
         with pytest.raises(NemligAPIError) as exc_info:
@@ -70,12 +65,10 @@ class TestAuthentication:
         assert "400" in str(exc_info.value) or "Client Error" in str(exc_info.value)
         assert not api_client.is_logged_in()
 
-    def test_login_network_error(self, mock_responses, api_client):
+    def test_login_network_error(self, mock_httpx, api_client):
         """Login with network error should raise NemligAPIError."""
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/login",
-            body=ConnectionError("Network unreachable"),
+        mock_httpx.post(f"{API_BASE_URL}/login").mock(
+            side_effect=httpx.ConnectError("Network unreachable")
         )
 
         with pytest.raises(NemligAPIError) as exc_info:
@@ -83,13 +76,11 @@ class TestAuthentication:
 
         assert "Login failed" in str(exc_info.value)
 
-    def test_login_http_error(self, mock_responses, api_client):
+    def test_login_http_error(self, mock_httpx, api_client):
         """Login with HTTP error should raise NemligAPIError."""
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/login",
+        mock_httpx.post(f"{API_BASE_URL}/login").respond(
             json={"error": "Service unavailable"},
-            status=503,
+            status_code=503,
         )
 
         with pytest.raises(NemligAPIError):
@@ -101,7 +92,7 @@ class TestSessionRefresh:
 
     def test_refresh_session_gets_token(
         self,
-        mock_responses,
+        mock_httpx,
         api_client,
         mock_token_response,
         mock_app_settings_response,
@@ -109,26 +100,15 @@ class TestSessionRefresh:
         mock_timeslot_response,
     ):
         """Session refresh should fetch and store JWT token."""
-        mock_responses.add(
-            responses.GET, f"{API_BASE_URL}/Token", json=mock_token_response, status=200
+        mock_httpx.get(f"{API_BASE_URL}/Token").respond(json=mock_token_response, status_code=200)
+        mock_httpx.get(f"{API_BASE_URL}/v2/AppSettings/Website").respond(
+            json=mock_app_settings_response, status_code=200
         )
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/v2/AppSettings/Website",
-            json=mock_app_settings_response,
-            status=200,
+        mock_httpx.get(f"{API_BASE_URL}/user/GetCurrentUser").respond(
+            json=mock_user_response, status_code=200
         )
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/user/GetCurrentUser",
-            json=mock_user_response,
-            status=200,
-        )
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/Order/DeliverySpot",
-            json=mock_timeslot_response,
-            status=200,
+        mock_httpx.get(f"{API_BASE_URL}/Order/DeliverySpot").respond(
+            json=mock_timeslot_response, status_code=200
         )
 
         api_client._refresh_session_data()
@@ -140,31 +120,22 @@ class TestSessionRefresh:
 
     def test_refresh_session_handles_token_failure(
         self,
-        mock_responses,
+        mock_httpx,
         api_client,
         mock_app_settings_response,
         mock_user_response,
         mock_timeslot_response,
     ):
         """Session refresh should handle token fetch failure gracefully."""
-        mock_responses.add(responses.GET, f"{API_BASE_URL}/Token", body=ConnectionError("timeout"))
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/v2/AppSettings/Website",
-            json=mock_app_settings_response,
-            status=200,
+        mock_httpx.get(f"{API_BASE_URL}/Token").mock(side_effect=httpx.ConnectError("timeout"))
+        mock_httpx.get(f"{API_BASE_URL}/v2/AppSettings/Website").respond(
+            json=mock_app_settings_response, status_code=200
         )
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/user/GetCurrentUser",
-            json=mock_user_response,
-            status=200,
+        mock_httpx.get(f"{API_BASE_URL}/user/GetCurrentUser").respond(
+            json=mock_user_response, status_code=200
         )
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/Order/DeliverySpot",
-            json=mock_timeslot_response,
-            status=200,
+        mock_httpx.get(f"{API_BASE_URL}/Order/DeliverySpot").respond(
+            json=mock_timeslot_response, status_code=200
         )
 
         api_client._refresh_session_data()
@@ -173,24 +144,18 @@ class TestSessionRefresh:
         # Other data should still be fetched
         assert api_client._combined_timestamp == "TEST-TIMESTAMP-123"
 
-    def test_refresh_session_uses_fallback_values(self, mock_responses, api_client):
+    def test_refresh_session_uses_fallback_values(self, mock_httpx, api_client):
         """Session refresh should use fallback values when API fails."""
         # All requests fail
-        mock_responses.add(responses.GET, f"{API_BASE_URL}/Token", body=ConnectionError("timeout"))
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/v2/AppSettings/Website",
-            body=ConnectionError("timeout"),
+        mock_httpx.get(f"{API_BASE_URL}/Token").mock(side_effect=httpx.ConnectError("timeout"))
+        mock_httpx.get(f"{API_BASE_URL}/v2/AppSettings/Website").mock(
+            side_effect=httpx.ConnectError("timeout")
         )
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/user/GetCurrentUser",
-            body=ConnectionError("timeout"),
+        mock_httpx.get(f"{API_BASE_URL}/user/GetCurrentUser").mock(
+            side_effect=httpx.ConnectError("timeout")
         )
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/Order/DeliverySpot",
-            body=ConnectionError("timeout"),
+        mock_httpx.get(f"{API_BASE_URL}/Order/DeliverySpot").mock(
+            side_effect=httpx.ConnectError("timeout")
         )
 
         api_client._refresh_session_data()
@@ -205,14 +170,11 @@ class TestProductSearch:
     """Tests for product search functionality."""
 
     def test_search_products_via_gateway(
-        self, mock_responses, api_client, mock_search_response, setup_session_mocks
+        self, mock_httpx, api_client, mock_search_response, setup_session_mocks
     ):
         """Search should return products from the search gateway."""
-        mock_responses.add(
-            responses.GET,
-            f"{SEARCH_GATEWAY_URL}/search",
-            json=mock_search_response,
-            status=200,
+        mock_httpx.get(f"{SEARCH_GATEWAY_URL}/search").respond(
+            json=mock_search_response, status_code=200
         )
 
         products = api_client.search_products("mælk", limit=10)
@@ -222,13 +184,9 @@ class TestProductSearch:
         assert products[0]["price"] == 15.95
         assert products[0]["brand"] == "Arla"
 
-    def test_search_products_parses_availability(
-        self, mock_responses, api_client, setup_session_mocks
-    ):
+    def test_search_products_parses_availability(self, mock_httpx, api_client, setup_session_mocks):
         """Search should correctly parse product availability."""
-        mock_responses.add(
-            responses.GET,
-            f"{SEARCH_GATEWAY_URL}/search",
+        mock_httpx.get(f"{SEARCH_GATEWAY_URL}/search").respond(
             json={
                 "Products": {
                     "Products": [
@@ -253,7 +211,7 @@ class TestProductSearch:
                     ]
                 }
             },
-            status=200,
+            status_code=200,
         )
 
         products = api_client.search_products("test", limit=10)
@@ -262,36 +220,28 @@ class TestProductSearch:
         assert products[1]["available"] is False
 
     def test_search_products_returns_empty_on_gateway_failure(
-        self, mock_responses, api_client, setup_session_mocks
+        self, mock_httpx, api_client, setup_session_mocks
     ):
         """Search should return empty list when gateway fails."""
-        mock_responses.add(
-            responses.GET,
-            f"{SEARCH_GATEWAY_URL}/search",
-            body=ConnectionError("Gateway timeout"),
+        mock_httpx.get(f"{SEARCH_GATEWAY_URL}/search").mock(
+            side_effect=httpx.ConnectError("Gateway timeout")
         )
         # Also mock the quick search fallback
-        mock_responses.add(
-            responses.GET,
-            f"{SEARCH_GATEWAY_URL}/quick",
-            json={"Categories": [], "Suggestions": []},
-            status=200,
+        mock_httpx.get(f"{SEARCH_GATEWAY_URL}/quick").respond(
+            json={"Categories": [], "Suggestions": []}, status_code=200
         )
 
         products = api_client.search_products("mælk", limit=10)
 
         assert products == []
 
-    def test_search_products_respects_limit(self, mock_responses, api_client, setup_session_mocks):
+    def test_search_products_respects_limit(self, mock_httpx, api_client, setup_session_mocks):
         """Search should respect the limit parameter."""
         many_products = [
             {"Id": i, "Name": f"Product {i}", "Price": 10.0, "Availability": {}} for i in range(20)
         ]
-        mock_responses.add(
-            responses.GET,
-            f"{SEARCH_GATEWAY_URL}/search",
-            json={"Products": {"Products": many_products}},
-            status=200,
+        mock_httpx.get(f"{SEARCH_GATEWAY_URL}/search").respond(
+            json={"Products": {"Products": many_products}}, status_code=200
         )
 
         products = api_client.search_products("test", limit=5)
@@ -299,14 +249,11 @@ class TestProductSearch:
         assert len(products) == 5
 
     def test_search_products_triggers_session_refresh(
-        self, mock_responses, api_client, mock_search_response, setup_session_mocks
+        self, mock_httpx, api_client, mock_search_response, setup_session_mocks
     ):
         """Search should refresh session data if not already available."""
-        mock_responses.add(
-            responses.GET,
-            f"{SEARCH_GATEWAY_URL}/search",
-            json=mock_search_response,
-            status=200,
+        mock_httpx.get(f"{SEARCH_GATEWAY_URL}/search").respond(
+            json=mock_search_response, status_code=200
         )
 
         # No session data yet
@@ -321,11 +268,9 @@ class TestProductSearch:
 class TestSearchSuggestions:
     """Tests for search suggestions functionality."""
 
-    def test_get_search_suggestions(self, mock_responses, api_client, setup_session_mocks):
+    def test_get_search_suggestions(self, mock_httpx, api_client, setup_session_mocks):
         """Should return suggestions and categories."""
-        mock_responses.add(
-            responses.GET,
-            f"{SEARCH_GATEWAY_URL}/quick",
+        mock_httpx.get(f"{SEARCH_GATEWAY_URL}/quick").respond(
             json={
                 "Suggestions": ["mælk", "mælkesnitte", "mælkebøtte"],
                 "Categories": [
@@ -333,7 +278,7 @@ class TestSearchSuggestions:
                     {"Name": "Plantemælk", "Url": "/mejeri/plantemælk"},
                 ],
             },
-            status=200,
+            status_code=200,
         )
 
         result = api_client.get_search_suggestions("mælk")
@@ -343,13 +288,11 @@ class TestSearchSuggestions:
         assert result["categories"][0]["Name"] == "Mælk & Fløde"
 
     def test_get_search_suggestions_handles_failure(
-        self, mock_responses, api_client, setup_session_mocks
+        self, mock_httpx, api_client, setup_session_mocks
     ):
         """Should return empty results on failure."""
-        mock_responses.add(
-            responses.GET,
-            f"{SEARCH_GATEWAY_URL}/quick",
-            body=ConnectionError("timeout"),
+        mock_httpx.get(f"{SEARCH_GATEWAY_URL}/quick").mock(
+            side_effect=httpx.ConnectError("timeout")
         )
 
         result = api_client.get_search_suggestions("mælk")
@@ -368,24 +311,18 @@ class TestCartOperations:
         assert "Must be logged in" in str(exc_info.value)
 
     def test_add_to_cart_success(
-        self, mock_responses, api_client, mock_login_success_response, setup_session_mocks
+        self, mock_httpx, api_client, mock_login_success_response, setup_session_mocks
     ):
         """Successfully adding to cart should return True."""
         # Login first
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/login",
-            json=mock_login_success_response,
-            status=200,
+        mock_httpx.post(f"{API_BASE_URL}/login").respond(
+            json=mock_login_success_response, status_code=200
         )
         api_client.login("test@example.com", "password")
 
         # Add to cart
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/basket/AddToBasket",
-            json={"Success": True},
-            status=200,
+        mock_httpx.post(f"{API_BASE_URL}/basket/AddToBasket").respond(
+            json={"Success": True}, status_code=200
         )
 
         result = api_client.add_to_cart(100001, quantity=2)
@@ -393,21 +330,16 @@ class TestCartOperations:
         assert result is True
 
     def test_add_to_cart_network_error(
-        self, mock_responses, api_client, mock_login_success_response, setup_session_mocks
+        self, mock_httpx, api_client, mock_login_success_response, setup_session_mocks
     ):
         """Network error when adding to cart should raise NemligAPIError."""
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/login",
-            json=mock_login_success_response,
-            status=200,
+        mock_httpx.post(f"{API_BASE_URL}/login").respond(
+            json=mock_login_success_response, status_code=200
         )
         api_client.login("test@example.com", "password")
 
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/basket/AddToBasket",
-            body=ConnectionError("timeout"),
+        mock_httpx.post(f"{API_BASE_URL}/basket/AddToBasket").mock(
+            side_effect=httpx.ConnectError("timeout")
         )
 
         with pytest.raises(NemligAPIError) as exc_info:
@@ -416,29 +348,20 @@ class TestCartOperations:
         assert "Failed to add to cart" in str(exc_info.value)
 
     def test_add_multiple_to_cart(
-        self, mock_responses, api_client, mock_login_success_response, setup_session_mocks
+        self, mock_httpx, api_client, mock_login_success_response, setup_session_mocks
     ):
         """Adding multiple items should track success and failures."""
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/login",
-            json=mock_login_success_response,
-            status=200,
+        mock_httpx.post(f"{API_BASE_URL}/login").respond(
+            json=mock_login_success_response, status_code=200
         )
         api_client.login("test@example.com", "password")
 
-        # First item succeeds
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/basket/AddToBasket",
-            json={"Success": True},
-            status=200,
-        )
-        # Second item fails
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/basket/AddToBasket",
-            body=ConnectionError("timeout"),
+        # Use side_effect with a list to sequence multiple responses
+        mock_httpx.post(f"{API_BASE_URL}/basket/AddToBasket").mock(
+            side_effect=[
+                httpx.Response(200, json={"Success": True}),
+                httpx.ConnectError("timeout"),
+            ]
         )
 
         items = [
@@ -452,14 +375,11 @@ class TestCartOperations:
         assert result["failed"][0]["product_id"] == 100002
 
     def test_add_multiple_to_cart_missing_product_id(
-        self, mock_responses, api_client, mock_login_success_response, setup_session_mocks
+        self, mock_httpx, api_client, mock_login_success_response, setup_session_mocks
     ):
         """Items without product_id should be recorded as failed."""
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/login",
-            json=mock_login_success_response,
-            status=200,
+        mock_httpx.post(f"{API_BASE_URL}/login").respond(
+            json=mock_login_success_response, status_code=200
         )
         api_client.login("test@example.com", "password")
 
@@ -478,26 +398,20 @@ class TestCartOperations:
 
     def test_get_cart_success(
         self,
-        mock_responses,
+        mock_httpx,
         api_client,
         mock_login_success_response,
         mock_cart_response,
         setup_session_mocks,
     ):
         """Getting cart should return cart contents."""
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/login",
-            json=mock_login_success_response,
-            status=200,
+        mock_httpx.post(f"{API_BASE_URL}/login").respond(
+            json=mock_login_success_response, status_code=200
         )
         api_client.login("test@example.com", "password")
 
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/basket/GetBasket",
-            json=mock_cart_response,
-            status=200,
+        mock_httpx.get(f"{API_BASE_URL}/basket/GetBasket").respond(
+            json=mock_cart_response, status_code=200
         )
 
         cart = api_client.get_cart()
@@ -514,22 +428,16 @@ class TestCartOperations:
         assert "Must be logged in" in str(exc_info.value)
 
     def test_clear_cart_success(
-        self, mock_responses, api_client, mock_login_success_response, setup_session_mocks
+        self, mock_httpx, api_client, mock_login_success_response, setup_session_mocks
     ):
         """Clearing cart should return True on success."""
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/login",
-            json=mock_login_success_response,
-            status=200,
+        mock_httpx.post(f"{API_BASE_URL}/login").respond(
+            json=mock_login_success_response, status_code=200
         )
         api_client.login("test@example.com", "password")
 
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/basket/ClearBasket",
-            json={"Success": True},
-            status=200,
+        mock_httpx.post(f"{API_BASE_URL}/basket/ClearBasket").respond(
+            json={"Success": True}, status_code=200
         )
 
         result = api_client.clear_cart()
@@ -585,84 +493,50 @@ class TestProductParsing:
 class TestErrorHandling:
     """Tests for error handling across the API."""
 
-    def test_http_500_error_on_login(self, mock_responses, api_client):
+    def test_http_500_error_on_login(self, mock_httpx, api_client):
         """Server error during login should raise NemligAPIError."""
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/login",
-            json={"error": "Internal server error"},
-            status=500,
+        mock_httpx.post(f"{API_BASE_URL}/login").respond(
+            json={"error": "Internal server error"}, status_code=500
         )
 
         with pytest.raises(NemligAPIError):
             api_client.login("test@example.com", "password")
 
-    def test_timeout_on_search(self, mock_responses, api_client, setup_session_mocks):
+    def test_timeout_on_search(self, mock_httpx, api_client, setup_session_mocks):
         """Timeout during search should return empty list."""
-        mock_responses.add(
-            responses.GET,
-            f"{SEARCH_GATEWAY_URL}/search",
-            body=Timeout("Request timed out"),
+        mock_httpx.get(f"{SEARCH_GATEWAY_URL}/search").mock(
+            side_effect=httpx.TimeoutException("Request timed out")
         )
-        mock_responses.add(
-            responses.GET,
-            f"{SEARCH_GATEWAY_URL}/quick",
-            json={"Categories": []},
-            status=200,
+        mock_httpx.get(f"{SEARCH_GATEWAY_URL}/quick").respond(
+            json={"Categories": []}, status_code=200
         )
 
         result = api_client.search_products("test")
 
         assert result == []
 
-    def test_malformed_json_on_token(self, mock_responses, api_client):
+    def test_malformed_json_on_token(self, mock_httpx, api_client):
         """Malformed JSON response should be handled gracefully."""
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/Token",
-            body="not json",
-            status=200,
-        )
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/v2/AppSettings/Website",
-            json={},
-            status=200,
-        )
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/user/GetCurrentUser",
-            json={},
-            status=200,
-        )
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/Order/DeliverySpot",
-            json={},
-            status=200,
-        )
+        mock_httpx.get(f"{API_BASE_URL}/Token").respond(content=b"not json", status_code=200)
+        mock_httpx.get(f"{API_BASE_URL}/v2/AppSettings/Website").respond(json={}, status_code=200)
+        mock_httpx.get(f"{API_BASE_URL}/user/GetCurrentUser").respond(json={}, status_code=200)
+        mock_httpx.get(f"{API_BASE_URL}/Order/DeliverySpot").respond(json={}, status_code=200)
 
         # Should not raise, just return None for token
         api_client._refresh_session_data()
         assert api_client._access_token is None
 
     def test_cart_operations_handle_http_errors(
-        self, mock_responses, api_client, mock_login_success_response, setup_session_mocks
+        self, mock_httpx, api_client, mock_login_success_response, setup_session_mocks
     ):
         """HTTP errors on cart operations should raise NemligAPIError."""
-        mock_responses.add(
-            responses.POST,
-            f"{API_BASE_URL}/login",
-            json=mock_login_success_response,
-            status=200,
+        mock_httpx.post(f"{API_BASE_URL}/login").respond(
+            json=mock_login_success_response, status_code=200
         )
         api_client.login("test@example.com", "password")
 
-        mock_responses.add(
-            responses.GET,
-            f"{API_BASE_URL}/basket/GetBasket",
-            json={"error": "Service unavailable"},
-            status=503,
+        mock_httpx.get(f"{API_BASE_URL}/basket/GetBasket").respond(
+            json={"error": "Service unavailable"}, status_code=503
         )
 
         with pytest.raises(NemligAPIError) as exc_info:
