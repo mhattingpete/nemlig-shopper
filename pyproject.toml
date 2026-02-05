@@ -30,6 +30,7 @@ dependencies = [
 
 [project.scripts]
 nemlig = "nemlig_shopper.cli:main"
+nemlig-shopper = "nemlig_shopper.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/mhattingpete/nemlig-shopper"
