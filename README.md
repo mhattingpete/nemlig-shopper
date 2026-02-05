@@ -1,120 +1,80 @@
 # Nemlig Shopper 🛒
 
-A CLI tool that parses recipes from URLs or text, matches ingredients to products on [Nemlig.com](https://nemlig.com) (Danish online grocery store), and adds them directly to your cart.
-
-## Features
-
-- **Recipe Parsing**: Extract ingredients from recipe URLs (supports 100+ recipe sites) or manual text input
-- **Product Matching**: Automatically match ingredients to Nemlig.com products with smart scoring
-- **Recipe Scaling**: Double, halve, or scale recipes to any serving size
-- **Meal Planning**: Combine multiple recipes with ingredient consolidation
-- **Pantry Check**: Identifies common household items (salt, oil, etc.) so you don't buy what you have
-- **Dietary Filters**: Filter for lactose-free, gluten-free, or vegan products
-- **Interactive Review**: TUI for reviewing and swapping product matches before checkout
-- **Export**: Shopping lists to JSON, Markdown, or PDF
+A CLI tool for shopping on [Nemlig.com](https://nemlig.com) (Danish online grocery store). Parse recipes, search products, and add items to your cart.
 
 ## Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/mhattingpete/nemlig-shopper.git
-cd nemlig-shopper
+# Install from PyPI
+uv tool install nemlig-shopper
 
-# Install with uv (recommended)
-uv sync
+# Or run directly with uvx
+uvx nemlig-shopper --help
 ```
 
 ## Quick Start
 
 ```bash
-# 1. Log in to Nemlig.com
-uv run nemlig login
+# Log in to Nemlig.com
+nemlig-shopper login
 
-# 2. Add a recipe to cart
-uv run nemlig add https://www.valdemarsro.dk/pasta-carbonara/
+# Parse a recipe to see ingredients
+nemlig-shopper parse "https://www.valdemarsro.dk/pasta-carbonara/"
 
-# 3. Add multiple recipes (ingredients are consolidated)
-uv run nemlig add URL1 URL2 URL3
+# Search for products
+nemlig-shopper search "mælk"
+
+# Add a product to cart (by product ID from search results)
+nemlig-shopper add 701015
+
+# View your cart
+nemlig-shopper cart
 ```
-
-See [QUICKSTART.md](QUICKSTART.md) for more examples.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `nemlig login` | Authenticate with Nemlig.com |
-| `nemlig add` | Parse recipes/items and add to cart |
-| `nemlig parse` | Parse recipe from URL or text without adding to cart |
-| `nemlig search QUERY` | Search Nemlig products |
-| `nemlig pantry` | Manage household pantry items |
-| `nemlig export` | Export shopping list to file |
+| `login` | Authenticate with Nemlig.com |
+| `logout` | Clear saved credentials |
+| `parse <url>` | Parse recipe and display ingredient list |
+| `search <query>` | Search Nemlig products |
+| `add <product_id>` | Add product to cart |
+| `cart` | View current cart contents |
 
 ## Usage Examples
 
-### Adding Recipes
+### Parse a Recipe
 
 ```bash
-# Basic usage
-uv run nemlig add https://example.com/recipe
+# From URL (supports 100+ recipe sites)
+nemlig-shopper parse "https://www.valdemarsro.dk/lasagne/"
 
-# Scale to double
-uv run nemlig add https://example.com/recipe --scale 2
-
-# Scale to 8 servings
-uv run nemlig add https://example.com/recipe --servings 8
-
-# With dietary filter
-uv run nemlig add https://example.com/recipe --lactose-free
-
-# Preview without adding to cart
-uv run nemlig add https://example.com/recipe --dry-run
-
-# Skip pantry check
-uv run nemlig add https://example.com/recipe --skip-pantry-check
+# From text input
+nemlig-shopper parse --text "500g hakket oksekød
+1 løg
+2 fed hvidløg
+400g hakkede tomater"
 ```
 
-### Multiple Recipes
+### Search Products
 
 ```bash
-# Combine multiple recipes (ingredients consolidated)
-uv run nemlig add \
-  https://www.valdemarsro.dk/pasta-carbonara/ \
-  https://www.valdemarsro.dk/lasagne/
+# Basic search
+nemlig-shopper search "økologisk mælk"
+
+# Limit results
+nemlig-shopper search "ost" --limit 5
 ```
 
-### Manual Items
+### Add to Cart
 
 ```bash
-# Add manual items
-uv run nemlig add --text "mælk, brød, æg"
+# Add single item
+nemlig-shopper add 701015
 
-# Mixed: recipe URL + manual items
-uv run nemlig add --text "https://recipe.com/pasta
-mælk
-æg x6"
-
-# From file
-uv run nemlig add --file shopping-list.txt
-```
-
-### Pantry Management
-
-```bash
-# List your pantry items
-uv run nemlig pantry list
-
-# Add items you always have
-uv run nemlig pantry add "fish sauce" "sesame oil"
-
-# Remove items (so they're included in shopping)
-uv run nemlig pantry remove "eggs"
-
-# Show default pantry items
-uv run nemlig pantry defaults
-
-# Reset to defaults
-uv run nemlig pantry clear
+# Add with quantity
+nemlig-shopper add 701015 --quantity 2
 ```
 
 ## Configuration
@@ -127,42 +87,41 @@ Credentials can be provided via:
    NEMLIG_PASSWORD=your-password
    ```
 
-2. **Saved credentials**: Run `uv run nemlig login` to save credentials locally
+2. **Saved credentials**: Run `nemlig-shopper login` to save credentials locally
 
-Configuration files are stored in `~/.nemlig-shopper/`:
-- `credentials.json` - Login credentials (chmod 600)
-- `pantry.txt` - Pantry items (one per line, edit directly or via CLI)
+Credentials are stored in `~/.nemlig-shopper/credentials.json` (chmod 600).
 
 ## Supported Recipe Sites
 
-Uses [recipe-scrapers](https://github.com/hhursev/recipe-scrapers) supporting 100+ sites:
+Uses [recipe-scrapers](https://github.com/hhursev/recipe-scrapers) supporting 100+ sites including:
 
 - Valdemarsro (Danish)
+- Mummum (Danish)
 - AllRecipes
 - BBC Good Food
-- Bon Appétit
 - Serious Eats
 - And many more...
 
 ## Development
 
 ```bash
-# Install dependencies
+# Clone and install
+git clone https://github.com/mhattingpete/nemlig-shopper.git
+cd nemlig-shopper
 uv sync
 
 # Run tests
 uv run pytest
 
-# Run a specific test
-uv run pytest tests/test_recipe_parser.py -v
+# Run CLI locally
+uv run nemlig --help
 ```
 
 ## Notes
 
-- Uses an unofficial Nemlig.com API (discovered via network inspection)
-- Product matching uses smart scoring but may occasionally need manual adjustment
-- Danish ingredient names match better than English
-- Prices are estimates; actual cart totals may differ slightly
+- Uses an unofficial Nemlig.com API
+- Danish ingredient/product names work best
+- Product IDs are shown in search results
 
 ## License
 
