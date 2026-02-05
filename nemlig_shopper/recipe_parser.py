@@ -18,12 +18,13 @@ except ImportError:
     WebsiteNotImplementedError = Exception  # type: ignore[misc,assignment]
 
 try:
-    import httpx
+    import requests as requests_lib
     from bs4 import BeautifulSoup
 
     WEB_SCRAPING_AVAILABLE = True
 except ImportError:
     WEB_SCRAPING_AVAILABLE = False
+    requests_lib = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -516,12 +517,12 @@ def _scrape_recipe_fallback(url: str) -> Recipe:
     """
     if not WEB_SCRAPING_AVAILABLE:
         raise ImportError(
-            "httpx and beautifulsoup4 are required for fallback scraping. "
-            "Install with: pip install httpx beautifulsoup4"
+            "requests and beautifulsoup4 are required for fallback scraping. "
+            "Install with: pip install requests beautifulsoup4"
         )
 
     # Fetch the page
-    response = httpx.get(url, follow_redirects=True, timeout=30.0)
+    response = requests_lib.get(url, allow_redirects=True, timeout=30.0)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")

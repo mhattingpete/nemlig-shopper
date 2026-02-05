@@ -1,6 +1,5 @@
 """Nemlig.com API client for authentication, search, and cart operations."""
 
-import re
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -41,9 +40,7 @@ class NemligAPI:
         self._user_id: str | None = None
         self._combined_timestamp: str | None = None
         self._timeslot: str = self._generate_default_timeslot()
-        self._timeslot_id: int = 0  # Will be calculated dynamically
-        self._timeslot_reserved_at: datetime | None = None
-        self._timeslot_expires_in_minutes: int = 0
+        self._timeslot_id: int = 0
         self._correlation_id: str | None = None
 
     @staticmethod
@@ -322,12 +319,33 @@ class NemligAPI:
         """Parse product data from API response into standardized format."""
         products = []
 
+        # Keywords for dairy detection
+        dairy_keywords = {"mælk", "ost", "fløde", "yoghurt", "smør", "skyr"}
+
         for item in products_data[:limit]:
             # Extract availability info
             availability = item.get("Availability", {})
             is_available = availability.get("IsDeliveryAvailable", True) and availability.get(
                 "IsAvailableInStock", True
             )
+
+            # Extract category and labels for classification
+            category = item.get("Category", "") or ""
+            subcategory = item.get("SubCategory", "") or ""
+            labels = item.get("Labels", []) or []
+            labels_lower = [lbl.lower() if isinstance(lbl, str) else "" for lbl in labels]
+
+            # Determine product attributes from category and labels
+            is_organic = any("øko" in lbl for lbl in labels_lower)
+            is_frozen = category.lower() == "frost"
+            is_refrigerated = category.lower() == "køl"
+            is_dairy = "mejeri" in category.lower() or any(
+                kw in subcategory.lower() for kw in dairy_keywords
+            )
+            is_lactose_free = any("laktosefri" in lbl for lbl in labels_lower)
+            is_gluten_free = any("glutenfri" in lbl for lbl in labels_lower)
+            is_vegan = any("vegan" in lbl for lbl in labels_lower)
+            is_on_discount = item.get("DiscountItem", False) or item.get("IsDiscountItem", False)
 
             products.append(
                 {
@@ -338,11 +356,19 @@ class NemligAPI:
                     "unit_price_calc": item.get("UnitPriceCalc"),
                     "unit_size": item.get("Description", ""),
                     "brand": item.get("Brand", ""),
-                    "category": item.get("Category", ""),
-                    "subcategory": item.get("SubCategory", ""),
+                    "category": category,
+                    "subcategory": subcategory,
                     "image_url": item.get("PrimaryImage", ""),
                     "available": is_available,
-                    "labels": item.get("Labels", []),
+                    "labels": labels,
+                    "is_organic": is_organic,
+                    "is_frozen": is_frozen,
+                    "is_refrigerated": is_refrigerated,
+                    "is_dairy": is_dairy,
+                    "is_lactose_free": is_lactose_free,
+                    "is_gluten_free": is_gluten_free,
+                    "is_vegan": is_vegan,
+                    "is_on_discount": is_on_discount,
                 }
             )
 
@@ -488,242 +514,3 @@ class NemligAPI:
 
         except requests.RequestException as e:
             raise NemligAPIError(f"Failed to clear cart: {e}") from e
-
-    def get_order_history(self, skip: int = 0, take: int = 10) -> list[dict[str, Any]]:
-        """
-        Get list of previous orders.
-
-        Args:
-            skip: Number of orders to skip (for pagination)
-            take: Number of orders to retrieve
-
-        Returns:
-            List of order summaries with Id, OrderNumber, OrderDate, Total, etc.
-
-        Raises:
-            NemligAPIError: If not logged in or request fails
-        """
-        if not self._logged_in:
-            raise NemligAPIError("Must be logged in to view order history")
-
-        url = f"{API_BASE_URL}/order/GetBasicOrderHistory"
-        params = {"skip": skip, "take": take}
-
-        try:
-            response = self.session.get(url, params=params, headers=self._get_correlation_headers())
-            response.raise_for_status()
-            data = response.json()
-            return data.get("Orders", [])
-
-        except requests.RequestException as e:
-            raise NemligAPIError(f"Failed to get order history: {e}") from e
-
-    def get_order_details(self, order_id: int) -> list[dict[str, Any]]:
-        """
-        Get detailed product lines for a specific order.
-
-        Args:
-            order_id: The order Id (not OrderNumber)
-
-        Returns:
-            List of order lines with ProductNumber, ProductName, Quantity, etc.
-
-        Raises:
-            NemligAPIError: If not logged in or request fails
-        """
-        if not self._logged_in:
-            raise NemligAPIError("Must be logged in to view order details")
-
-        url = f"{API_BASE_URL}/v2/order/GetOrderHistory/{order_id}"
-
-        try:
-            response = self.session.get(url, headers=self._get_correlation_headers())
-            response.raise_for_status()
-            data = response.json()
-            # Filter to only product lines (not deposits, recipes, etc.)
-            lines = data.get("Lines", [])
-            return [line for line in lines if line.get("IsProductLine", False)]
-
-        except requests.RequestException as e:
-            raise NemligAPIError(f"Failed to get order details: {e}") from e
-
-    def get_previous_order_products(self, num_orders: int = 5) -> list[dict[str, Any]]:
-        """
-        Get all unique products from recent orders.
-
-        Args:
-            num_orders: Number of recent orders to fetch products from
-
-        Returns:
-            List of unique products with ProductNumber, ProductName, GroupName, etc.
-            Products are deduplicated by ProductNumber, with most recent occurrence kept.
-        """
-        if not self._logged_in:
-            raise NemligAPIError("Must be logged in to get previous order products")
-
-        orders = self.get_order_history(skip=0, take=num_orders)
-
-        # Collect products from all orders, keeping most recent occurrence
-        products_by_id: dict[str, dict[str, Any]] = {}
-
-        for order in orders:
-            order_id = order.get("Id")
-            if not order_id:
-                continue
-
-            try:
-                lines = self.get_order_details(order_id)
-                for line in lines:
-                    product_num = line.get("ProductNumber")
-                    if product_num and product_num not in products_by_id:
-                        products_by_id[product_num] = {
-                            "product_id": product_num,
-                            "name": line.get("ProductName", ""),
-                            "category": line.get("GroupName", ""),
-                            "main_category": line.get("MainGroupName", ""),
-                            "description": line.get("Description", ""),
-                        }
-            except NemligAPIError:
-                # Skip orders we can't fetch
-                continue
-
-        return list(products_by_id.values())
-
-    def get_delivery_slots(
-        self, days: int = 8, start_date: str | None = None
-    ) -> list[dict[str, Any]]:
-        """
-        Get available delivery time slots.
-
-        Args:
-            days: Number of days to fetch slots for (default 8)
-            start_date: Start date in YYYY-MM-DD format (default: today)
-
-        Returns:
-            List of delivery slots with id, date, time range, price, and availability
-
-        Raises:
-            NemligAPIError: If not logged in or request fails
-            ValueError: If start_date format is invalid
-        """
-        if not self._logged_in:
-            raise NemligAPIError("Must be logged in to view delivery slots")
-
-        # Validate start_date format if provided
-        if start_date is not None and not re.match(r"^\d{4}-\d{2}-\d{2}$", start_date):
-            raise ValueError(
-                f"Invalid start_date format: {start_date}. Expected YYYY-MM-DD format."
-            )
-
-        url = f"{API_BASE_URL}/v2/Delivery/GetDeliveryDays"
-        params = {
-            "startDate": start_date or "undefined",
-            "showForSubscriptions": "false",
-            "days": days,
-        }
-
-        try:
-            response = self.session.get(url, params=params, headers=self._get_correlation_headers())
-            response.raise_for_status()
-            data = response.json()
-
-            slots: list[dict[str, Any]] = []
-            for day_range in data.get("DayRangeHours", []):
-                for slot in day_range.get("DayHours", []):
-                    slots.append(
-                        {
-                            "id": slot.get("Id"),
-                            "date": slot.get("Date"),
-                            "start_hour": slot.get("StartHour"),
-                            "end_hour": slot.get("EndHour"),
-                            "delivery_price": slot.get("DeliveryPrice"),
-                            "deadline": slot.get("Deadline"),
-                            "availability": slot.get("Availability"),
-                            "is_free": slot.get("IsFreeHour", False),
-                            "type": slot.get("Type"),
-                            "is_available": slot.get("Availability") == "Available",
-                        }
-                    )
-
-            return slots
-
-        except requests.RequestException as e:
-            raise NemligAPIError(f"Failed to get delivery slots: {e}") from e
-
-    def select_delivery_slot(self, timeslot_id: int) -> dict[str, Any]:
-        """
-        Select a delivery time slot.
-
-        Args:
-            timeslot_id: The ID of the slot to select (from get_delivery_slots)
-
-        Returns:
-            Dict with reservation details including:
-            - is_reserved: Whether the slot was successfully reserved
-            - minutes_reserved: How long the reservation is valid
-            - timeslot_utc: The reserved timeslot identifier
-            - delivery_zone_id: The delivery zone
-
-        Raises:
-            NemligAPIError: If not logged in or selection fails
-            ValueError: If timeslot_id is negative or zero
-        """
-        if not self._logged_in:
-            raise NemligAPIError("Must be logged in to select delivery slot")
-
-        if timeslot_id <= 0:
-            raise ValueError(f"Invalid timeslot_id: {timeslot_id}. Must be a positive integer.")
-
-        url = f"{API_BASE_URL}/Delivery/TryUpdateDeliveryTime"
-        params = {"timeslotId": timeslot_id}
-
-        # Get XSRF token from cookies
-        xsrf_token = self.session.cookies.get("XSRF-TOKEN")
-        headers = self._get_correlation_headers()
-
-        # Check if XSRF token exists but is empty (invalid state)
-        if xsrf_token is not None and not xsrf_token:
-            raise NemligAPIError("XSRF token is empty. Session may be invalid.")
-
-        # Add XSRF token header if present
-        if xsrf_token:
-            headers["x-xsrf-token"] = xsrf_token
-
-        try:
-            response = self.session.post(url, params=params, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-
-            result = {
-                "is_reserved": data.get("IsReserved", False),
-                "minutes_reserved": data.get("MinutesReserved", 0),
-                "timeslot_utc": data.get("TimeslotUtc"),
-                "delivery_zone_id": data.get("DeliveryZoneId"),
-                "price_change_diff": data.get("PriceChangeDiff"),
-            }
-
-            # Update internal timeslot state if successful
-            if result["is_reserved"] and result["timeslot_utc"]:
-                self._timeslot = result["timeslot_utc"]
-                self._timeslot_id = timeslot_id
-                self._timeslot_reserved_at = datetime.now()
-                self._timeslot_expires_in_minutes = result["minutes_reserved"]
-
-            return result
-
-        except requests.RequestException as e:
-            raise NemligAPIError(f"Failed to select delivery slot: {e}") from e
-
-    def is_timeslot_valid(self) -> bool:
-        """
-        Check if the currently reserved timeslot is still valid.
-
-        Returns:
-            True if a timeslot is reserved and has not expired, False otherwise
-        """
-        if self._timeslot_reserved_at is None or self._timeslot_expires_in_minutes == 0:
-            return False
-
-        elapsed = datetime.now() - self._timeslot_reserved_at
-        elapsed_minutes = elapsed.total_seconds() / 60
-        return elapsed_minutes < self._timeslot_expires_in_minutes

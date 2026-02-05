@@ -12,8 +12,6 @@ load_dotenv()
 APP_NAME = "nemlig-shopper"
 CONFIG_DIR = Path.home() / f".{APP_NAME}"
 CREDENTIALS_FILE = CONFIG_DIR / "credentials.json"
-PREFERENCES_FILE = CONFIG_DIR / "preferences.json"
-PANTRY_FILE = CONFIG_DIR / "pantry.txt"  # Simple text file, one item per line
 
 # Ensure config directory exists
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)

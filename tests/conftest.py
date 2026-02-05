@@ -125,61 +125,6 @@ def mock_cart_response():
 
 
 @pytest.fixture
-def mock_order_history_response():
-    """Standard order history response."""
-    return {
-        "Orders": [
-            {
-                "Id": 9001,
-                "OrderNumber": "NEM-123456",
-                "OrderDate": "2026-01-10T14:30:00",
-                "Total": 450.50,
-                "Status": "Delivered",
-            },
-            {
-                "Id": 9002,
-                "OrderNumber": "NEM-123457",
-                "OrderDate": "2026-01-05T10:00:00",
-                "Total": 320.00,
-                "Status": "Delivered",
-            },
-        ]
-    }
-
-
-@pytest.fixture
-def mock_order_details_response():
-    """Standard order details response."""
-    return {
-        "Lines": [
-            {
-                "ProductNumber": "100001",
-                "ProductName": "Økologisk Sødmælk",
-                "Quantity": 2,
-                "GroupName": "Mælk",
-                "MainGroupName": "Mejeri",
-                "Description": "1 liter",
-                "IsProductLine": True,
-            },
-            {
-                "ProductNumber": "100002",
-                "ProductName": "Rugbrød",
-                "Quantity": 1,
-                "GroupName": "Brød",
-                "MainGroupName": "Bageri",
-                "Description": "750g",
-                "IsProductLine": True,
-            },
-            {
-                "ProductNumber": None,
-                "ProductName": "Pant",
-                "IsProductLine": False,
-            },
-        ]
-    }
-
-
-@pytest.fixture
 def setup_session_mocks(
     mock_responses,
     mock_token_response,

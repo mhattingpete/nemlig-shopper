@@ -59,6 +59,16 @@ def sample_products():
             "price": 35.95,
             "unit_size": "10 stk",
             "brand": "Arla",
+            "category": "Mejeri",
+            "available": True,
+            "is_organic": True,
+            "is_dairy": True,
+            "is_refrigerated": True,
+            "is_frozen": False,
+            "is_lactose_free": False,
+            "is_gluten_free": False,
+            "is_vegan": False,
+            "is_on_discount": False,
         },
         {
             "id": 1002,
@@ -66,6 +76,16 @@ def sample_products():
             "price": 12.95,
             "unit_size": "1 kg",
             "brand": "Valsemøllen",
+            "category": "Kolonial",
+            "available": True,
+            "is_organic": False,
+            "is_dairy": False,
+            "is_refrigerated": False,
+            "is_frozen": False,
+            "is_lactose_free": False,
+            "is_gluten_free": False,
+            "is_vegan": True,
+            "is_on_discount": True,
         },
     ]
 
@@ -89,6 +109,18 @@ class TestMainCli:
         result = runner.invoke(cli, ["--version"])
         assert result.exit_code == 0
         assert "1.0.0" in result.output
+
+    def test_cli_shows_commands(self, runner):
+        """CLI help should show all available commands."""
+        result = runner.invoke(cli, ["--help"])
+        assert result.exit_code == 0
+        # Verify the 6 expected commands are listed
+        assert "login" in result.output
+        assert "logout" in result.output
+        assert "parse" in result.output
+        assert "search" in result.output
+        assert "add" in result.output
+        assert "cart" in result.output
 
 
 # ============================================================================
@@ -171,9 +203,8 @@ class TestSearchCommand:
             result = runner.invoke(cli, ["search", "æg"])
 
         assert result.exit_code == 0
-        assert "Found 2 products" in result.output
         assert "Økologiske Æg" in result.output
-        assert "35.95 DKK" in result.output
+        assert "35.95" in result.output
 
     def test_search_no_results(self, runner, mock_api):
         """Search with no results should display message."""
@@ -204,6 +235,20 @@ class TestSearchCommand:
         assert result.exit_code == 1
         assert "Search failed" in result.output
 
+    def test_search_displays_product_labels(self, runner, mock_api, sample_products):
+        """Search should display product labels like organic, discount."""
+        mock_api.search_products.return_value = sample_products
+
+        with patch("nemlig_shopper.cli.get_api", return_value=mock_api):
+            result = runner.invoke(cli, ["search", "æg"])
+
+        assert result.exit_code == 0
+        # First product has organic and dairy labels
+        assert "[Øko]" in result.output
+        assert "[Dairy]" in result.output
+        # Second product has discount
+        assert "[Tilbud]" in result.output
+
 
 # ============================================================================
 # Parse Command Tests
@@ -219,27 +264,36 @@ class TestParseCommand:
             result = runner.invoke(cli, ["parse", "https://example.com/recipe"])
 
         assert result.exit_code == 0
-        assert "RECIPE: Test Recipe" in result.output
-        assert "Servings: 4" in result.output
-        assert "2 eggs" in result.output
-        assert "200g flour" in result.output
+        assert "Recipe: Test Recipe" in result.output
+        assert "4 servings" in result.output
+        assert "eggs" in result.output
+        assert "flour" in result.output
 
-    def test_parse_with_scale(self, runner, sample_recipe):
-        """Parse with scale should show scaled ingredients."""
-        with patch("nemlig_shopper.cli.parse_recipe_url", return_value=sample_recipe):
-            result = runner.invoke(cli, ["parse", "https://example.com/recipe", "--scale", "2"])
+    def test_parse_text_input(self, runner):
+        """Parse should handle text input."""
+        with patch("nemlig_shopper.cli.parse_recipe_text") as mock_parse:
+            mock_recipe = Recipe(
+                title="Manual Recipe",
+                ingredients=[
+                    Ingredient(original="eggs", name="eggs", quantity=None, unit=None),
+                    Ingredient(original="flour", name="flour", quantity=None, unit=None),
+                ],
+                servings=None,
+                source_url=None,
+            )
+            mock_parse.return_value = mock_recipe
+            result = runner.invoke(cli, ["parse", "--text", "eggs, flour"])
 
         assert result.exit_code == 0
-        assert "Scaling" in result.output
-        assert "Scaled Ingredients" in result.output
+        assert "eggs" in result.output
+        assert "flour" in result.output
 
-    def test_parse_with_servings(self, runner, sample_recipe):
-        """Parse with target servings should show scaled ingredients."""
-        with patch("nemlig_shopper.cli.parse_recipe_url", return_value=sample_recipe):
-            result = runner.invoke(cli, ["parse", "https://example.com/recipe", "--servings", "8"])
+    def test_parse_requires_input(self, runner):
+        """Parse should require either URL or text input."""
+        result = runner.invoke(cli, ["parse"])
 
-        assert result.exit_code == 0
-        assert "Scaling" in result.output
+        assert result.exit_code == 1
+        assert "Provide a URL or use --text" in result.output
 
     def test_parse_invalid_url(self, runner):
         """Parse with invalid URL should display error."""
@@ -267,237 +321,101 @@ class TestAddCommand:
 
         with patch("nemlig_shopper.cli.get_api", return_value=mock_api):
             with patch("nemlig_shopper.cli.get_credentials", return_value=(None, None)):
-                result = runner.invoke(cli, ["add", "https://example.com/recipe"])
+                result = runner.invoke(cli, ["add", "1001"])
 
         assert result.exit_code == 1
         assert "Please log in" in result.output
 
-    def test_add_with_credentials(self, runner, mock_api_logged_in, sample_recipe):
-        """Add should work with valid credentials."""
-        mock_api_logged_in.add_multiple_to_cart.return_value = {
-            "success": [1001, 1002],
-            "failed": [],
-        }
-
-        mock_matches = [
-            MagicMock(
-                matched=True,
-                ingredient_name="eggs",
-                product_name="Æg",
-                price=35.95,
-                quantity=1,
-                is_dietary_safe=True,
-                dietary_warnings=[],
-                excluded_count=0,
-                alternatives=[],
-                to_dict=lambda: {},
-            ),
-        ]
+    def test_add_product_success(self, runner, mock_api_logged_in):
+        """Add should add product to cart."""
+        mock_api_logged_in.add_to_cart.return_value = True
 
         with patch("nemlig_shopper.cli.get_api", return_value=mock_api_logged_in):
-            with patch("nemlig_shopper.cli.parse_recipe_url", return_value=sample_recipe):
-                with patch("nemlig_shopper.cli.match_ingredients", return_value=mock_matches):
-                    with patch(
-                        "nemlig_shopper.cli.prepare_cart_items",
-                        return_value=[{"product_id": 1001, "quantity": 1}],
-                    ):
-                        result = runner.invoke(
-                            cli,
-                            ["add", "https://example.com/recipe", "--yes", "--skip-pantry-check"],
-                        )
+            result = runner.invoke(cli, ["add", "1001"])
 
         assert result.exit_code == 0
-        assert "Added 2 products to cart" in result.output
+        assert "Added 1x product 1001 to cart" in result.output
+        mock_api_logged_in.add_to_cart.assert_called_once_with(1001, 1)
 
-    def test_add_with_dietary_filters(self, runner, mock_api_logged_in, sample_recipe):
-        """Add with dietary filters should pass them to matcher."""
-        mock_api_logged_in.add_multiple_to_cart.return_value = {
-            "success": [1001],
-            "failed": [],
-        }
-
-        # Mock match_ingredient (singular) - called once per ingredient
-        mock_match_result = MagicMock(
-            matched=True,
-            ingredient_name="milk",
-            product_name="Laktosefri Mælk",
-            price=18.95,
-            quantity=1,
-            is_dietary_safe=True,
-            dietary_warnings=[],
-            excluded_count=2,
-            alternatives=[],
-            to_dict=lambda: {},
-        )
+    def test_add_product_with_quantity(self, runner, mock_api_logged_in):
+        """Add should respect quantity parameter."""
+        mock_api_logged_in.add_to_cart.return_value = True
 
         with patch("nemlig_shopper.cli.get_api", return_value=mock_api_logged_in):
-            with patch("nemlig_shopper.cli.parse_recipe_url", return_value=sample_recipe):
-                with patch(
-                    "nemlig_shopper.cli.match_ingredient", return_value=mock_match_result
-                ) as mock_match:
-                    with patch(
-                        "nemlig_shopper.cli.prepare_cart_items",
-                        return_value=[{"product_id": 1001, "quantity": 1}],
-                    ):
-                        result = runner.invoke(
-                            cli,
-                            [
-                                "add",
-                                "https://example.com/recipe",
-                                "--lactose-free",
-                                "--gluten-free",
-                                "--yes",
-                                "--skip-pantry-check",
-                            ],
-                        )
+            result = runner.invoke(cli, ["add", "1001", "--quantity", "3"])
 
-        # Verify dietary filters were passed to match_ingredient
-        assert mock_match.called
-        call_kwargs = mock_match.call_args[1]
-        assert "lactose" in call_kwargs["allergies"]
-        assert "gluten" in call_kwargs["allergies"]
-        assert "Dietary filters" in result.output
+        assert result.exit_code == 0
+        assert "Added 3x product 1001 to cart" in result.output
+        mock_api_logged_in.add_to_cart.assert_called_once_with(1001, 3)
 
-    def test_add_cancelled_by_user(self, runner, mock_api_logged_in, sample_recipe):
-        """Add should respect user cancellation."""
-        mock_matches = [
-            MagicMock(
-                matched=True,
-                ingredient_name="eggs",
-                product_name="Æg",
-                price=35.95,
-                quantity=1,
-                is_dietary_safe=True,
-                dietary_warnings=[],
-                excluded_count=0,
-                alternatives=[],
-            ),
-        ]
+    def test_add_product_failure(self, runner, mock_api_logged_in):
+        """Add should handle API errors."""
+        mock_api_logged_in.add_to_cart.side_effect = NemligAPIError("Product not found")
 
         with patch("nemlig_shopper.cli.get_api", return_value=mock_api_logged_in):
-            with patch("nemlig_shopper.cli.parse_recipe_url", return_value=sample_recipe):
-                with patch("nemlig_shopper.cli.match_ingredients", return_value=mock_matches):
-                    with patch("nemlig_shopper.cli.get_unmatched_ingredients", return_value=[]):
-                        # Simulate user saying 'n' to confirmation
-                        result = runner.invoke(
-                            cli,
-                            ["add", "https://example.com/recipe", "--skip-pantry-check"],
-                            input="n\n",
-                        )
+            result = runner.invoke(cli, ["add", "9999"])
 
-        assert "Cancelled" in result.output
+        assert result.exit_code == 1
+        assert "Failed to add to cart" in result.output
 
 
 # ============================================================================
-# Preferences Command Tests
+# Cart Command Tests
 # ============================================================================
 
 
-class TestPreferencesCommands:
-    """Tests for preferences subcommands."""
+class TestCartCommand:
+    """Tests for the cart command."""
 
-    def test_preferences_status(self, runner):
-        """Preferences status should display count and last sync."""
-        with patch("nemlig_shopper.cli.get_preference_count", return_value=42):
-            with patch("nemlig_shopper.cli.get_last_sync_time", return_value="2026-01-15 10:00"):
-                result = runner.invoke(cli, ["preferences", "status"])
-
-        assert result.exit_code == 0
-        assert "Products tracked: 42" in result.output
-        assert "Last synced: 2026-01-15 10:00" in result.output
-
-    def test_preferences_status_never_synced(self, runner):
-        """Preferences status with no sync should suggest syncing."""
-        with patch("nemlig_shopper.cli.get_preference_count", return_value=0):
-            with patch("nemlig_shopper.cli.get_last_sync_time", return_value=None):
-                result = runner.invoke(cli, ["preferences", "status"])
-
-        assert result.exit_code == 0
-        assert "Last synced: Never" in result.output
-        assert "nemlig preferences sync" in result.output
-
-    def test_preferences_sync(self, runner, mock_api_logged_in):
-        """Preferences sync should fetch from order history."""
-        with patch("nemlig_shopper.cli.get_api", return_value=mock_api_logged_in):
-            with patch(
-                "nemlig_shopper.cli.sync_preferences_from_orders", return_value=50
-            ) as mock_sync:
-                result = runner.invoke(cli, ["preferences", "sync", "--orders", "5"])
-
-        assert result.exit_code == 0
-        assert "Synced 50 products" in result.output
-        mock_sync.assert_called_once_with(mock_api_logged_in, 5)
-
-    def test_preferences_clear_confirmed(self, runner):
-        """Preferences clear with --yes should clear."""
-        with patch("nemlig_shopper.cli.clear_preferences") as mock_clear:
-            result = runner.invoke(cli, ["preferences", "clear", "--yes"])
-
-        assert result.exit_code == 0
-        assert "Preferences cleared" in result.output
-        mock_clear.assert_called_once()
-
-    def test_preferences_clear_cancelled(self, runner):
-        """Preferences clear without confirmation should cancel."""
-        with patch("nemlig_shopper.cli.clear_preferences") as mock_clear:
-            result = runner.invoke(cli, ["preferences", "clear"], input="n\n")
-
-        assert "Cancelled" in result.output
-        mock_clear.assert_not_called()
-
-
-# ============================================================================
-# Export Command Tests
-# ============================================================================
-
-
-class TestExportCommand:
-    """Tests for the export command."""
-
-    def test_export_to_json(self, runner, mock_api, sample_recipe, tmp_path):
-        """Export should create JSON file."""
-        output_file = tmp_path / "shopping.json"
-
-        mock_matches = []
+    def test_cart_requires_login(self, runner, mock_api):
+        """Cart should require login."""
+        mock_api.is_logged_in.return_value = False
 
         with patch("nemlig_shopper.cli.get_api", return_value=mock_api):
-            with patch("nemlig_shopper.cli.parse_recipe_url", return_value=sample_recipe):
-                with patch("nemlig_shopper.cli.match_ingredients", return_value=mock_matches):
-                    with patch(
-                        "nemlig_shopper.cli.export_shopping_list", return_value="json"
-                    ) as mock_export:
-                        result = runner.invoke(
-                            cli, ["export", "https://example.com/recipe", str(output_file)]
-                        )
+            with patch("nemlig_shopper.cli.get_credentials", return_value=(None, None)):
+                result = runner.invoke(cli, ["cart"])
+
+        assert result.exit_code == 1
+        assert "Please log in" in result.output
+
+    def test_cart_empty(self, runner, mock_api_logged_in):
+        """Cart should show empty message when no items."""
+        mock_api_logged_in.get_cart.return_value = {
+            "Lines": [],
+            "TotalProductsPrice": 0,
+            "NumberOfProducts": 0,
+            "DeliveryPrice": 0,
+        }
+
+        with patch("nemlig_shopper.cli.get_api", return_value=mock_api_logged_in):
+            result = runner.invoke(cli, ["cart"])
 
         assert result.exit_code == 0
-        assert "Exported" in result.output
-        assert "json format" in result.output
-        mock_export.assert_called_once()
+        assert "Your cart is empty" in result.output
 
-    def test_export_with_scale(self, runner, mock_api, sample_recipe, tmp_path):
-        """Export with scale should scale the recipe."""
-        output_file = tmp_path / "shopping.md"
+    def test_cart_with_items(self, runner, mock_api_logged_in):
+        """Cart should display items and totals."""
+        mock_api_logged_in.get_cart.return_value = {
+            "Lines": [
+                {"ProductName": "Økologisk Mælk", "Quantity": 2, "Total": 27.90},
+                {"ProductName": "Rugbrød", "Quantity": 1, "Total": 18.95},
+            ],
+            "TotalProductsPrice": 46.85,
+            "NumberOfProducts": 3,
+            "DeliveryPrice": 29.00,
+            "FormattedDeliveryTime": "Onsdag 10:00-12:00",
+        }
 
-        mock_matches = []
-
-        with patch("nemlig_shopper.cli.get_api", return_value=mock_api):
-            with patch("nemlig_shopper.cli.parse_recipe_url", return_value=sample_recipe):
-                with patch("nemlig_shopper.cli.match_ingredients", return_value=mock_matches):
-                    with patch("nemlig_shopper.cli.export_shopping_list", return_value="md"):
-                        result = runner.invoke(
-                            cli,
-                            [
-                                "export",
-                                "https://example.com/recipe",
-                                str(output_file),
-                                "--scale",
-                                "2",
-                            ],
-                        )
+        with patch("nemlig_shopper.cli.get_api", return_value=mock_api_logged_in):
+            result = runner.invoke(cli, ["cart"])
 
         assert result.exit_code == 0
-        assert "Scaling: 2" in result.output
+        assert "SHOPPING CART" in result.output
+        assert "Økologisk Mælk" in result.output
+        assert "Rugbrød" in result.output
+        assert "46.85 DKK" in result.output
+        assert "29.00 DKK" in result.output  # Delivery
+        assert "Onsdag 10:00-12:00" in result.output
 
 
 # ============================================================================
