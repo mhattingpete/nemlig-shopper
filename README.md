@@ -117,6 +117,64 @@ uv run pytest
 uv run nemlig --help
 ```
 
+## Using with Claude Code or LLM Agents
+
+This CLI is designed to be agent-friendly. An LLM agent (Claude Code, custom agents, etc.) can drive the full shopping workflow by chaining CLI commands.
+
+### Prerequisites
+
+1. Install the CLI (see [Installation](#installation))
+2. Set up credentials via environment variables or `nemlig-shopper login`
+3. Point your agent at [`SKILL.md`](SKILL.md) for the full command reference
+
+### Agent Workflow
+
+A shopping list can contain a mix of **recipe URLs** and **plain ingredients**. The agent workflow is:
+
+```
+Shopping List (URLs + plain items)
+  ├─ Recipe URLs → nemlig-shopper parse <url> → extract ingredients
+  ├─ Plain items → use directly
+  ↓
+For each ingredient:
+  → nemlig-shopper search "<danish ingredient name>" → get product IDs
+  → nemlig-shopper add <product_id> --quantity <n> → add to cart
+  ↓
+nemlig-shopper cart → verify final cart
+```
+
+### Example: Agent Shopping Session
+
+```bash
+# 1. Parse a recipe URL to get ingredients
+nemlig-shopper parse "https://www.valdemarsro.dk/pasta-carbonara/"
+# Output: list of ingredients with quantities and units
+
+# 2. Search for each ingredient (Danish names work best)
+nemlig-shopper search "spaghetti"
+nemlig-shopper search "pancetta"
+nemlig-shopper search "æg"
+nemlig-shopper search "parmesan"
+
+# 3. Add selected products by ID
+nemlig-shopper add 701015 --quantity 1
+nemlig-shopper add 503220 --quantity 1
+nemlig-shopper add 100042 --quantity 1
+nemlig-shopper add 504100 --quantity 1
+
+# 4. Verify the cart
+nemlig-shopper cart
+```
+
+### Tips for Agent Integration
+
+- **Translation**: Nemlig.com is Danish. Translate English ingredient names to Danish before searching (e.g., "milk" → "mælk", "onion" → "løg", "chicken" → "kylling").
+- **Product selection**: Search results include product ID, name, price, size, and stock status. Pick products that are in stock and match the needed quantity/size.
+- **Quantities**: The `parse` command outputs quantities and units per ingredient. Use these to determine how many units of a product to add.
+- **Multiple recipes**: Process each recipe URL separately with `parse`, then search and add all ingredients.
+- **Plain items**: Items like "mælk" or "rugbrød" that aren't from a recipe can be searched directly without parsing.
+- **Skill file**: See [`SKILL.md`](SKILL.md) for the complete agent-readable command reference.
+
 ## Notes
 
 - Uses an unofficial Nemlig.com API
