@@ -1,5 +1,10 @@
 # Nemlig Shopper 🛒
 
+[![PyPI](https://img.shields.io/pypi/v/nemlig-shopper)](https://pypi.org/project/nemlig-shopper/)
+[![Downloads](https://img.shields.io/pypi/dm/nemlig-shopper)](https://pypi.org/project/nemlig-shopper/)
+[![Python](https://img.shields.io/pypi/pyversions/nemlig-shopper)](https://pypi.org/project/nemlig-shopper/)
+[![License](https://img.shields.io/github/license/mhattingpete/nemlig-shopper)](LICENSE)
+
 A CLI tool for shopping on [Nemlig.com](https://nemlig.com) (Danish online grocery store). Parse recipes, search products, and add items to your cart.
 
 ## Installation

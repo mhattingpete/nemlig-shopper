@@ -8,6 +8,7 @@ requires-python = ">=3.10"
 authors = [
     { name = "mhattingpete" }
 ]
+keywords = ["nemlig", "grocery", "cli", "shopping", "danish", "recipe"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
