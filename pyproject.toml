@@ -27,11 +27,14 @@ dependencies = [
     "click>=8.0.0",
     "python-dotenv>=1.0.0",
     "beautifulsoup4>=4.14.3",
+    "fastmcp>=3.2",
+    "pydantic>=2",
 ]
 
 [project.scripts]
 nemlig = "nemlig_shopper.cli:main"
 nemlig-shopper = "nemlig_shopper.cli:main"
+nemlig-mcp = "nemlig_shopper.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/mhattingpete/nemlig-shopper"
