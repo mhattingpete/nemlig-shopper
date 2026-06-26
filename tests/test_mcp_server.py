@@ -131,6 +131,41 @@ class TestSearchProducts:
 
 
 # ============================================================================
+# Picker widget (MCP Apps) — headless: registration + fallback only
+# ============================================================================
+
+
+class TestPickerWidget:
+    def test_pick_products_tool_present(self):
+        assert "pick_products" in _tool_names()
+
+    def test_pick_products_returns_fallback_list(self, setup_session_mocks, mock_search_response):
+        setup_session_mocks.get(f"{SEARCH_GATEWAY_URL}/search").respond(json=mock_search_response)
+        result = _call("pick_products", {"query": "mælk", "limit": 5})
+        products = result.structured_content["result"]
+        assert any(p["name"] == "Økologisk Sødmælk" for p in products)
+
+    def test_picker_resource_is_interactive_html(self):
+        async def go():
+            async with Client(mcp) as client:
+                return await client.read_resource("ui://nemlig/picker.html")
+
+        contents = asyncio.run(go())
+        html = contents[0].text
+        assert "<!DOCTYPE html>" in html
+        assert "add_to_cart" in html  # the widget calls back into the cart tool
+        assert "ext-apps" in html  # uses the MCP Apps host bridge
+
+    def test_pick_and_search_return_same_data(self, setup_session_mocks, mock_search_response):
+        # Both delegate to _search; this guards against future divergence.
+        setup_session_mocks.get(f"{SEARCH_GATEWAY_URL}/search").respond(json=mock_search_response)
+        search = _call("search_products", {"query": "mælk", "limit": 5})
+        setup_session_mocks.get(f"{SEARCH_GATEWAY_URL}/search").respond(json=mock_search_response)
+        pick = _call("pick_products", {"query": "mælk", "limit": 5})
+        assert search.structured_content == pick.structured_content
+
+
+# ============================================================================
 # _rank tagging (pure function — no HTTP)
 # ============================================================================
 
