@@ -1,12 +1,18 @@
 """Unit tests for the recipe_parser module."""
 
+import pytest
+import respx
+
 from nemlig_shopper.recipe_parser import (
     Ingredient,
     Recipe,
+    _assert_public_url,
+    _safe_get,
     parse_ingredient_text,
     parse_ingredients_text,
     parse_quantity,
     parse_recipe_text,
+    parse_recipe_url,
     parse_unit,
 )
 
@@ -321,3 +327,55 @@ class TestParseRecipeText:
         ingredients = "2 cups flour"
         recipe = parse_recipe_text("Simple Recipe", ingredients)
         assert recipe.servings is None
+
+
+class TestSsrfGuard:
+    """The recipe-URL fetch must refuse internal/non-public destinations."""
+
+    # IP literals so getaddrinfo resolves offline (no DNS needed).
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://127.0.0.1/recipe",  # loopback
+            "http://[::1]/recipe",  # IPv6 loopback
+            "http://10.0.0.1/recipe",  # private
+            "http://192.168.1.10/recipe",  # private
+            "http://172.16.5.5/recipe",  # private
+            "http://169.254.169.254/latest/meta-data/",  # link-local (cloud metadata)
+            "http://0.0.0.0/recipe",  # unspecified
+            "http://100.64.0.1/recipe",  # CGNAT (RFC 6598) — blocked even on Python 3.10
+        ],
+    )
+    def test_rejects_non_public_hosts(self, url):
+        with pytest.raises(ValueError, match="non-public"):
+            _assert_public_url(url)
+
+    @pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://example.com/x", "gopher://x/"])
+    def test_rejects_non_http_schemes(self, url):
+        with pytest.raises(ValueError, match="non-HTTP"):
+            _assert_public_url(url)
+
+    def test_allows_public_ip(self):
+        # A public IP literal validates offline and must not raise.
+        _assert_public_url("https://1.1.1.1/recipe")
+
+    def test_parse_recipe_url_blocks_internal_host(self):
+        # The up-front guard fires before any fetch, covering the recipe-scrapers path.
+        with pytest.raises(ValueError, match="non-public"):
+            parse_recipe_url("http://169.254.169.254/recipe")
+
+    @respx.mock
+    def test_safe_get_blocks_redirect_to_internal(self):
+        # Public start host, but it 302-redirects to a private address → must be refused.
+        respx.get("https://1.1.1.1/r").respond(
+            status_code=302, headers={"Location": "http://10.0.0.1/"}
+        )
+        with pytest.raises(ValueError, match="non-public"):
+            _safe_get("https://1.1.1.1/r")
+
+    @respx.mock
+    def test_safe_get_rejects_redirect_without_location(self):
+        # A 3xx with no Location must raise, not silently return the redirect page.
+        respx.get("https://1.1.1.1/r").respond(status_code=302)
+        with pytest.raises(ValueError, match="no Location"):
+            _safe_get("https://1.1.1.1/r")

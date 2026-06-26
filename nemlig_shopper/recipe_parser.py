@@ -1,8 +1,11 @@
 """Recipe URL and text parsing module."""
 
+import ipaddress
 import re
+import socket
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urljoin, urlparse
 
 if TYPE_CHECKING:
     pass
@@ -507,6 +510,58 @@ def _extract_nuxt_data(soup: "BeautifulSoup") -> dict[str, Any] | None:
     return None
 
 
+_MAX_REDIRECTS = 5
+# CGNAT shared space (RFC 6598); ipaddress.is_private only covers it on Python 3.11+.
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _assert_public_url(url: str) -> None:
+    """Reject non-HTTP(S) URLs and hosts that resolve to a private/loopback/link-local
+    address (SSRF guard for user-supplied recipe URLs)."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError(f"Refusing to fetch non-HTTP(S) URL: {url!r}")
+    try:
+        port = parsed.port or 0
+    except ValueError as e:
+        raise ValueError(f"Invalid port in URL: {url!r}") from e
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, port)
+    except socket.gaierror as e:
+        raise ValueError(f"Could not resolve host: {parsed.hostname}") from e
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+            or (ip.version == 4 and ip in _CGNAT)
+        ):
+            raise ValueError(f"Refusing to fetch a non-public address: {parsed.hostname} ({ip})")
+
+
+def _safe_get(url: str) -> "httpx.Response":
+    """GET a user-supplied URL with an SSRF guard, validating every redirect hop.
+
+    ponytail: does not defend against DNS rebinding (httpx re-resolves the host after the
+    check) — acceptable for a local, user-driven tool; revisit if this ever runs as a service.
+    """
+    for _ in range(_MAX_REDIRECTS + 1):
+        _assert_public_url(url)
+        response = httpx.get(url, follow_redirects=False, timeout=30.0)
+        if response.is_redirect:
+            location = response.headers.get("location")
+            if not location:
+                raise ValueError(f"Redirect with no Location header from {url!r}")
+            url = urljoin(url, location)
+            continue
+        return response
+    raise ValueError(f"Too many redirects fetching {url!r}")
+
+
 def _scrape_recipe_fallback(url: str) -> Recipe:
     """
     Fallback scraper for websites not supported by recipe-scrapers.
@@ -520,8 +575,8 @@ def _scrape_recipe_fallback(url: str) -> Recipe:
             "Install with: pip install httpx beautifulsoup4"
         )
 
-    # Fetch the page
-    response = httpx.get(url, follow_redirects=True, timeout=30.0)
+    # Fetch the page (SSRF-guarded: rejects private/loopback hosts, validates each redirect)
+    response = _safe_get(url)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -689,6 +744,11 @@ def parse_recipe_url(url: str) -> Recipe:
             "recipe-scrapers package is required for URL parsing. "
             "Install with: pip install recipe-scrapers"
         )
+
+    # SSRF guard: reject internal/loopback hosts before fetching. This validates the
+    # initial URL only — redirects followed internally by recipe-scrapers (and DNS
+    # rebinding) are not covered; acceptable for a local, user-driven tool.
+    _assert_public_url(url)
 
     try:
         scraper = scrape_me(url)
