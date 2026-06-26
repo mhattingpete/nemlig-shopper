@@ -7,7 +7,7 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 from nemlig_shopper.api import SEARCH_GATEWAY_URL
-from nemlig_shopper.mcp_server import Product, _rank, mcp
+from nemlig_shopper.mcp_server import Product, _apps_enabled, _rank, mcp
 
 
 def _make_product(
@@ -163,6 +163,50 @@ class TestPickerWidget:
         setup_session_mocks.get(f"{SEARCH_GATEWAY_URL}/search").respond(json=mock_search_response)
         pick = _call("pick_products", {"query": "mælk", "limit": 5})
         assert search.structured_content == pick.structured_content
+
+
+# ============================================================================
+# MCP Apps gate (NEMLIG_MCP_APPS)
+# ============================================================================
+
+
+class TestAppsGate:
+    @pytest.mark.parametrize("value", ["0", "false", "FALSE", " off ", "no"])
+    def test_falsy_values_disable(self, monkeypatch, value):
+        monkeypatch.setenv("NEMLIG_MCP_APPS", value)
+        assert _apps_enabled() is False
+
+    @pytest.mark.parametrize("value", ["1", "true", "yes", "on"])
+    def test_other_values_enable(self, monkeypatch, value):
+        monkeypatch.setenv("NEMLIG_MCP_APPS", value)
+        assert _apps_enabled() is True
+
+    def test_default_enabled_when_unset(self, monkeypatch):
+        monkeypatch.delenv("NEMLIG_MCP_APPS", raising=False)
+        assert _apps_enabled() is True
+
+    def test_disabled_hides_picker_tool_and_resource(self, monkeypatch):
+        import importlib
+
+        import nemlig_shopper.mcp_server as mod
+
+        monkeypatch.setenv("NEMLIG_MCP_APPS", "0")
+        reloaded = importlib.reload(mod)
+        try:
+
+            async def go():
+                async with Client(reloaded.mcp) as client:
+                    tools = {t.name for t in await client.list_tools()}
+                    resources = {str(r.uri) for r in await client.list_resources()}
+                    return tools, resources
+
+            tools, resources = asyncio.run(go())
+            assert "pick_products" not in tools
+            assert "search_products" in tools  # conversational tools remain
+            assert "ui://nemlig/picker.html" not in resources
+        finally:
+            monkeypatch.delenv("NEMLIG_MCP_APPS", raising=False)
+            importlib.reload(mod)  # restore apps-enabled module for other tests
 
 
 # ============================================================================

@@ -5,6 +5,7 @@ order. Run via `nemlig-mcp` (stdio) and wire into a client's MCP config.
 """
 
 import functools
+import os
 
 from fastmcp import FastMCP
 from fastmcp.apps import AppConfig, ResourceCSP
@@ -21,6 +22,11 @@ from .recipe_parser import parse_recipe_text, parse_recipe_url
 mcp = FastMCP(name="nemlig-shopper", mask_error_details=True)
 
 PICKER_URI = "ui://nemlig/picker.html"
+
+
+def _apps_enabled() -> bool:
+    """Whether the interactive MCP Apps picker is enabled (NEMLIG_MCP_APPS, default on)."""
+    return os.environ.get("NEMLIG_MCP_APPS", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
 class Product(BaseModel):
@@ -124,17 +130,6 @@ def search_products(query: str, limit: int = 8) -> list[Product]:
     """Search Nemlig.com for grocery products. Use Danish search terms for best results
     (e.g. 'mælk', 'hakket oksekød'). Returns ranked candidates tagged 'cheapest',
     'recommended', and/or 'organic' so you can present clear choices to the user."""
-    return _search(query, limit)
-
-
-@_tool(app=AppConfig(resource_uri=PICKER_URI))
-def pick_products(query: str, limit: int = 8) -> list[Product]:
-    """Show the user an interactive picker to choose a product among candidates.
-
-    Prefer this over search_products when you want the user to choose — several options
-    are reasonable, or you're unsure which they'd prefer. Clients that render MCP Apps show
-    clickable cards (each 'Add' button adds that product); other clients fall back to the
-    same candidate list for conversational picking."""
     return _search(query, limit)
 
 
@@ -276,13 +271,33 @@ _PICKER_HTML = """<!DOCTYPE html>
 </html>"""
 
 
-@mcp.resource(
-    PICKER_URI,
-    app=AppConfig(csp=ResourceCSP(resource_domains=["https://unpkg.com"])),
-)
-def _picker_widget() -> str:
-    """Interactive product-picker UI (MCP Apps), rendered by `pick_products`."""
-    return _PICKER_HTML
+def _register_apps() -> None:
+    """Register the interactive picker tool + UI resource (MCP Apps).
+
+    Gated behind NEMLIG_MCP_APPS so users can run a plain, conversational-only server.
+    """
+
+    @_tool(app=AppConfig(resource_uri=PICKER_URI))
+    def pick_products(query: str, limit: int = 8) -> list[Product]:
+        """Show the user an interactive picker to choose a product among candidates.
+
+        Prefer this over search_products when you want the user to choose — several options
+        are reasonable, or you're unsure which they'd prefer. Clients that render MCP Apps
+        show clickable cards (each 'Add' button adds that product); other clients fall back
+        to the same candidate list for conversational picking."""
+        return _search(query, limit)
+
+    @mcp.resource(
+        PICKER_URI,
+        app=AppConfig(csp=ResourceCSP(resource_domains=["https://unpkg.com"])),
+    )
+    def _picker_widget() -> str:
+        """Interactive product-picker UI (MCP Apps), rendered by `pick_products`."""
+        return _PICKER_HTML
+
+
+if _apps_enabled():
+    _register_apps()
 
 
 def main():
