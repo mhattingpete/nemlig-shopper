@@ -211,12 +211,17 @@ Instead of driving the CLI, you can run Nemlig Shopper as an **MCP server** so C
 | Tool | What it does |
 |------|--------------|
 | `search_products` | Search Nemlig; returns candidates tagged `cheapest` / `recommended` / `organic` |
+| `pick_products` | Like `search_products`, but renders an **interactive picker** (MCP Apps) so you click to add — falls back to the same list where rendering isn't supported |
 | `parse_recipe` | Expand a recipe URL or ingredient text into structured ingredients |
 | `add_to_cart` | Add a product (by id) to the basket |
 | `view_cart` | Show the current basket and totals |
 | `clear_cart` | Empty the basket |
 
 There is intentionally **no checkout tool** — review and place the order yourself at [nemlig.com/basket](https://www.nemlig.com/basket).
+
+> **Interactive picker:** `pick_products` ships a clickable card UI via [MCP Apps](https://modelcontextprotocol.io). It renders today in clients that support MCP Apps (e.g. claude.ai); Claude Desktop's support is still maturing, and there it degrades gracefully to the conversational candidate list.
+>
+> **Disabling it:** set `NEMLIG_MCP_APPS=0` (or `false`/`no`/`off`) in the server's `env` to turn the widget off entirely — `pick_products` and the UI resource aren't registered, leaving only the conversational tools.
 
 ### Example prompt
 
