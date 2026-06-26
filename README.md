@@ -180,6 +180,48 @@ nemlig-shopper cart
 - **Plain items**: Items like "mælk" or "rugbrød" that aren't from a recipe can be searched directly without parsing.
 - **Skill file**: See [`SKILL.md`](SKILL.md) for the complete agent-readable command reference.
 
+## MCP Server (Claude Desktop & Claude clients)
+
+Instead of driving the CLI, you can run Nemlig Shopper as an **MCP server** so Claude searches, picks products, and fills your basket directly in chat. Paste a shopping list mixing recipe URLs and plain groceries and Claude handles the rest — it never places an order, it stops at a filled basket.
+
+### Setup
+
+1. Install the package (see [Installation](#installation)) so the `nemlig-mcp` command is available.
+2. Add the server to your client's MCP config. For **Claude Desktop**, edit `claude_desktop_config.json`:
+
+   ```json
+   {
+     "mcpServers": {
+       "nemlig": {
+         "command": "nemlig-mcp",
+         "env": {
+           "NEMLIG_USERNAME": "your-email@example.com",
+           "NEMLIG_PASSWORD": "your-password"
+         }
+       }
+     }
+   }
+   ```
+
+   (With `uvx`: `"command": "uvx"`, `"args": ["--from", "nemlig-shopper", "nemlig-mcp"]`.)
+3. Restart the client — Nemlig's tools then appear in chat.
+
+### Tools
+
+| Tool | What it does |
+|------|--------------|
+| `search_products` | Search Nemlig; returns candidates tagged `cheapest` / `recommended` / `organic` |
+| `parse_recipe` | Expand a recipe URL or ingredient text into structured ingredients |
+| `add_to_cart` | Add a product (by id) to the basket |
+| `view_cart` | Show the current basket and totals |
+| `clear_cart` | Empty the basket |
+
+There is intentionally **no checkout tool** — review and place the order yourself at [nemlig.com/basket](https://www.nemlig.com/basket).
+
+### Example prompt
+
+> Here's my list: https://www.valdemarsro.dk/pasta-carbonara/ plus milk, rye bread, and bananas. Find good options on Nemlig and fill my basket — ask me when you're unsure.
+
 ## Notes
 
 - Uses an unofficial Nemlig.com API
