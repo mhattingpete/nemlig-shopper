@@ -1,5 +1,6 @@
 """Nemlig.com API client for authentication, search, and cart operations."""
 
+import logging
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -7,6 +8,22 @@ from typing import Any
 import httpx
 
 from .config import API_BASE_URL
+
+logger = logging.getLogger("nemlig_shopper")
+
+
+def _log_request(request: httpx.Request) -> None:
+    logger.debug("→ %s %s", request.method, request.url)
+
+
+def _log_response(response: httpx.Response) -> None:
+    logger.debug("← %s %s", response.status_code, response.url)
+
+
+# Retry only on connection errors (with backoff); ponytail: add a 5xx/read-timeout
+# retry loop here if Nemlig starts returning transient server errors.
+_HTTP_TRANSPORT_RETRIES = 3
+_EVENT_HOOKS = {"request": [_log_request], "response": [_log_response]}
 
 
 class NemligAPIError(Exception):
@@ -33,7 +50,16 @@ class NemligAPI:
                 "platform": "web",
                 "device-size": "desktop",
             },
+            transport=httpx.HTTPTransport(retries=_HTTP_TRANSPORT_RETRIES),
+            event_hooks=_EVENT_HOOKS,
             follow_redirects=True,
+            timeout=30.0,
+        )
+        # Separate client with no default Content-Type header (which causes 400s on the
+        # search gateway); per-request gateway headers are supplied at call time.
+        self.gateway_client = httpx.Client(
+            transport=httpx.HTTPTransport(retries=_HTTP_TRANSPORT_RETRIES),
+            event_hooks=_EVENT_HOOKS,
             timeout=30.0,
         )
         self._logged_in = False
@@ -45,9 +71,11 @@ class NemligAPI:
         self._correlation_id: str | None = None
 
     def __del__(self):
-        """Close the HTTP client on cleanup."""
+        """Close the HTTP clients on cleanup."""
         if hasattr(self, "client"):
             self.client.close()
+        if hasattr(self, "gateway_client"):
+            self.gateway_client.close()
 
     @staticmethod
     def _generate_default_timeslot() -> str:
@@ -271,10 +299,8 @@ class NemligAPI:
         }
 
         try:
-            # Use httpx.get directly to avoid client's Content-Type header
-            # which causes 400 errors on the search gateway
-            response = httpx.get(
-                url, params=params, headers=self._get_gateway_headers(), timeout=30.0
+            response = self.gateway_client.get(
+                url, params=params, headers=self._get_gateway_headers()
             )
             response.raise_for_status()
 

@@ -48,6 +48,7 @@ packages = ["nemlig_shopper"]
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
     "respx>=0.22.0",
     "ruff>=0.8.0",
     "ty>=0.0.1a0",
