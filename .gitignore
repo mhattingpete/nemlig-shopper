@@ -9,6 +9,7 @@ build/
 .uv/
 .pytest_cache/
 .ruff_cache/
+.coverage
 
 # Local data files
 data/

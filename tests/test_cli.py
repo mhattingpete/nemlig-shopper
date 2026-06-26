@@ -110,6 +110,11 @@ class TestMainCli:
         assert result.exit_code == 0
         assert "1.0.0" in result.output
 
+    def test_debug_flag_registered(self, runner):
+        """The --debug/-v flag should be a valid group option."""
+        result = runner.invoke(cli, ["--debug", "--help"])
+        assert result.exit_code == 0
+
     def test_cli_shows_commands(self, runner):
         """CLI help should show all available commands."""
         result = runner.invoke(cli, ["--help"])
