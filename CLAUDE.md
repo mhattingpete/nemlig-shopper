@@ -37,12 +37,15 @@ uv run ty check
 ### Data Flow
 
 ```
-Recipe URL/Text → recipe_parser → Recipe → scaler → ScaledIngredient[] → matcher → ProductMatch[] → api → Cart
+Recipe URL/Text → recipe_parser → Recipe (ingredients)
+Search query → api.search_products → product dicts → api.add_to_cart → Cart
 ```
 
 ### Core Modules
 
-- **cli.py**: Click-based CLI entry point. Defines all commands (`login`, `parse`, `add`, `search`, `pantry`, `export`). Uses a singleton `NemligAPI` instance.
+The package is exactly these modules:
+
+- **cli.py**: Click-based CLI entry point. Commands: `login`, `logout`, `parse`, `search`, `add`, `cart`. Uses a singleton `NemligAPI` via `get_api()` (the seam tests patch).
 
 - **api.py**: HTTP client for Nemlig.com's unofficial API. Handles authentication (JWT tokens), product search via search gateway, and cart operations. Key endpoints:
   - `/webapi/login` - Authentication
@@ -51,31 +54,23 @@ Recipe URL/Text → recipe_parser → Recipe → scaler → ScaledIngredient[] �
 
 - **recipe_parser.py**: Parses recipes from URLs (using `recipe-scrapers` library) or manual text input. Extracts quantities, units, and ingredient names. Handles fractions (Unicode and text), ranges, and mixed numbers.
 
-- **scaler.py**: Scales recipe quantities by multiplier or target servings. Rounds to practical cooking measurements (e.g., ceiling for countable items, quarters for small quantities).
-
-- **matcher.py**: Matches ingredients to Nemlig products. Uses English→Danish translation dictionary, smart scoring to prioritize food categories over non-food, and filters out derivative products (e.g., "onion chips" when searching for "onion").
-
-- **config.py**: Manages credentials (env vars or `~/.nemlig-shopper/credentials.json`) and app configuration.
-
-- **pantry.py**: Simple text file (`~/.nemlig-shopper/pantry.txt`) for items user always has at home. One item per line.
-
-- **preference_engine.py**: Dietary/allergy checking for product matches (--lactose-free, --gluten-free, --vegan flags).
+- **config.py**: Manages credentials (env vars `NEMLIG_USERNAME`/`NEMLIG_PASSWORD`, or `~/.nemlig-shopper/credentials.json`).
 
 ### Key Design Patterns
 
-- **ProductMatch scoring**: The matcher scores products based on category relevance, name matching, and penalizes non-food items and derivative products. See `is_organic_product()` for organic detection.
+- **Product attributes**: `api._parse_products()` derives flags (`is_organic`, `is_frozen`, `is_dairy`, `is_on_discount`, etc.) inline from each product's category and labels.
 
 - **Lazy API initialization**: Session data (JWT token, timestamps, timeslot) is fetched on-demand and cached for subsequent requests.
 
-- **Simple config files**: Pantry uses plain text (one item per line), credentials use JSON. Edit directly or via CLI commands.
+- **HTTP robustness**: the `httpx.Client` uses `HTTPTransport(retries=3)` (connection-error retries) and `event_hooks` for debug logging; `nemlig -v/--debug` (or `NEMLIG_DEBUG`) turns logging on.
 
 ## Testing
 
-Tests use pytest. Focus areas:
+Tests use pytest with `respx` for HTTP mocking (120 tests). Files:
 - `test_recipe_parser.py`: Quantity/unit parsing, fractions, ingredient extraction
-- `test_scaler.py`: Scaling math, practical rounding
-
-No mocking of external APIs in current tests - they test parsing logic only.
+- `test_api.py`: Auth, search, cart operations (respx-mocked HTTP)
+- `test_cli.py`: CLI commands (patch `nemlig_shopper.cli.get_api`)
+- `test_config.py`: Credential storage (env + JSON file)
 
 ## API Discovery
 
@@ -110,14 +105,11 @@ Since these run automatically, there's no need to manually run linting or type c
 ## Quick Reference
 
 ### Adding a new CLI command
-Reference: `cli.py` - follow the pattern of `add_to_cart()` or `export_list()`
-
-### Adding ingredient translations
-Edit `INGREDIENT_TRANSLATIONS` dict in `matcher.py`
+Reference: `cli.py` - follow the pattern of `add_to_cart()` or `search()`
 
 ### Testing a recipe URL
 ```bash
-uv run nemlig parse "https://recipe-url.com" --dry-run
+uv run nemlig parse "https://recipe-url.com"
 ```
 
 ### API changes

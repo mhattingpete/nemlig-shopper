@@ -1,5 +1,7 @@
 """CLI entry point for Nemlig Shopper."""
 
+import logging
+
 import click
 
 from .api import NemligAPI, NemligAPIError
@@ -44,12 +46,19 @@ def ensure_logged_in(api: NemligAPI) -> bool:
 
 @click.group()
 @click.version_option(version="1.0.0", prog_name="nemlig-shopper")
-def cli():
+@click.option("--debug", "-v", is_flag=True, envvar="NEMLIG_DEBUG", help="Enable debug logging")
+def cli(debug: bool):
     """Nemlig.com Recipe-to-Cart CLI Tool.
 
     Parse recipes from URLs, search products, and add them to your cart.
     """
-    pass
+    if debug:
+        # Scope DEBUG to our own logger only (not httpx/httpcore, which can log headers).
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        nemlig_logger = logging.getLogger("nemlig_shopper")
+        nemlig_logger.setLevel(logging.DEBUG)
+        nemlig_logger.addHandler(handler)
 
 
 # ============================================================================
