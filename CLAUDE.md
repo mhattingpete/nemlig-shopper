@@ -56,6 +56,8 @@ The package is exactly these modules:
 
 - **config.py**: Manages credentials (env vars `NEMLIG_USERNAME`/`NEMLIG_PASSWORD`, or `~/.nemlig-shopper/credentials.json`).
 
+- **mcp_server.py**: FastMCP server (`nemlig-mcp` entry point) exposing the same core as tools for Claude clients: `search_products` (with cheapest/recommended/organic tags), `parse_recipe`, `add_to_cart`, `view_cart`, `clear_cart`. Cart-only — there is intentionally no checkout tool. Reuses `cli.get_api()`.
+
 ### Key Design Patterns
 
 - **Product attributes**: `api._parse_products()` derives flags (`is_organic`, `is_frozen`, `is_dairy`, `is_on_discount`, etc.) inline from each product's category and labels.
