@@ -5,8 +5,10 @@ order. Run via `nemlig-mcp` (stdio) and wire into a client's MCP config.
 """
 
 import functools
+import os
 
 from fastmcp import FastMCP
+from fastmcp.apps import AppConfig, ResourceCSP
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, Field
 
@@ -18,6 +20,13 @@ from .recipe_parser import parse_recipe_text, parse_recipe_url
 # mask_error_details hides unexpected internals; the _tool decorator turns expected
 # Nemlig/runtime errors into clean ToolErrors so Claude never sees a traceback.
 mcp = FastMCP(name="nemlig-shopper", mask_error_details=True)
+
+PICKER_URI = "ui://nemlig/picker.html"
+
+
+def _apps_enabled() -> bool:
+    """Whether the interactive MCP Apps picker is enabled (NEMLIG_MCP_APPS, default on)."""
+    return os.environ.get("NEMLIG_MCP_APPS", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
 class Product(BaseModel):
@@ -88,21 +97,32 @@ def _login_or_error() -> NemligAPI:
     return api
 
 
-def _tool(fn):
-    """Register an MCP tool, converting Nemlig/runtime errors into clean ToolErrors."""
+def _tool(fn=None, *, app=None):
+    """Register an MCP tool, converting Nemlig/runtime errors into clean ToolErrors.
 
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except ToolError:
-            raise
-        except NemligAPIError as e:
-            raise ToolError(str(e)) from None
-        except Exception as e:
-            raise ToolError(f"{fn.__name__} failed: {e}") from None
+    Use bare `@_tool` or `@_tool(app=AppConfig(...))` to attach an MCP Apps UI.
+    """
 
-    return mcp.tool(wrapper)
+    def decorate(target):
+        @functools.wraps(target)
+        def wrapper(*args, **kwargs):
+            try:
+                return target(*args, **kwargs)
+            except ToolError:
+                raise
+            except NemligAPIError as e:
+                raise ToolError(str(e)) from None
+            except Exception as e:
+                raise ToolError(f"{target.__name__} failed: {e}") from None
+
+        return mcp.tool(wrapper, app=app) if app is not None else mcp.tool(wrapper)
+
+    return decorate(fn) if fn is not None else decorate
+
+
+def _search(query: str, limit: int) -> list[Product]:
+    raw = get_api().search_products(query, limit=limit)
+    return _rank([Product.from_api(d) for d in raw], query)
 
 
 @_tool
@@ -110,8 +130,7 @@ def search_products(query: str, limit: int = 8) -> list[Product]:
     """Search Nemlig.com for grocery products. Use Danish search terms for best results
     (e.g. 'mælk', 'hakket oksekød'). Returns ranked candidates tagged 'cheapest',
     'recommended', and/or 'organic' so you can present clear choices to the user."""
-    raw = get_api().search_products(query, limit=limit)
-    return _rank([Product.from_api(d) for d in raw], query)
+    return _search(query, limit)
 
 
 @_tool
@@ -162,6 +181,123 @@ def clear_cart() -> str:
     """Remove all items from the Nemlig basket."""
     _login_or_error().clear_cart()
     return "Basket cleared."
+
+
+# Interactive product-picker widget (MCP Apps). Rendered by `pick_products`; clients that
+# can't render it fall back to the tool's structured list. Loads the ext-apps bridge from
+# unpkg (allowed via the resource CSP) and calls `add_to_cart` on click.
+_PICKER_HTML = """<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="utf-8" />
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 12px; color: #1a1a1a; }
+  .grid { display: grid; gap: 10px; }
+  .card { border: 1px solid #e3e3e3; border-radius: 10px; padding: 12px; display: flex; gap: 12px; justify-content: space-between; align-items: center; }
+  .info { min-width: 0; }
+  .name { font-weight: 600; }
+  .meta { color: #666; font-size: 13px; margin-top: 2px; }
+  .badges { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .badge { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: #eef; color: #335; }
+  .badge.cheapest { background: #e6f6ea; color: #1c6b34; }
+  .badge.recommended { background: #fff2da; color: #8a5b00; }
+  .badge.organic { background: #e9f7e1; color: #2c6e1f; }
+  .right { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  .price { font-weight: 700; white-space: nowrap; }
+  button { padding: 8px 14px; border: 0; border-radius: 8px; background: #0a7d33; color: #fff; font-weight: 600; cursor: pointer; }
+  button:disabled { background: #9bbfa6; cursor: default; }
+  .empty { color: #777; padding: 16px; }
+</style>
+</head>
+<body>
+  <div id="root"><div class="empty">Henter varer…</div></div>
+  <script type="module">
+    import { App } from "https://unpkg.com/@modelcontextprotocol/ext-apps@0.4.0/app-with-deps";
+
+    const root = document.getElementById("root");
+    const app = new App({ name: "Nemlig Picker", version: "1.0.0" });
+    const kr = (v) => (typeof v === "number" ? v.toFixed(2).replace(".", ",") + " kr." : "");
+
+    function productsFrom(content) {
+      const text = (content || []).find((c) => c.type === "text");
+      if (!text) return [];
+      let data;
+      try { data = JSON.parse(text.text); } catch { return []; }
+      if (Array.isArray(data)) return data;
+      return data.result || data.items || [];
+    }
+
+    function render(products) {
+      if (!products.length) { root.innerHTML = '<div class="empty">Ingen varer fundet.</div>'; return; }
+      const grid = document.createElement("div");
+      grid.className = "grid";
+      for (const p of products) {
+        const card = document.createElement("div");
+        card.className = "card";
+        const tags = (p.tags || []).map((t) => `<span class="badge ${t}">${t}</span>`).join("");
+        const unit = p.unit_price ? ` · ${kr(p.unit_price)}/enhed` : "";
+        const size = p.unit_size ? ` · ${p.unit_size}` : "";
+        card.innerHTML =
+          `<div class="info">
+             <div class="name"></div>
+             <div class="meta"></div>
+             <div class="badges">${tags}</div>
+           </div>
+           <div class="right"><div class="price">${kr(p.price)}</div></div>`;
+        card.querySelector(".name").textContent = p.name ?? "Ukendt vare";
+        card.querySelector(".meta").textContent = `${p.brand ?? ""}${size}${unit}`;
+        const btn = document.createElement("button");
+        btn.textContent = "Tilføj";
+        btn.disabled = !p.available || p.id == null;
+        btn.onclick = async () => {
+          btn.disabled = true; btn.textContent = "Tilføjer…";
+          try {
+            await app.callServerTool({ name: "add_to_cart", arguments: { product_id: p.id, quantity: 1 } });
+            btn.textContent = "Tilføjet ✓";
+          } catch {
+            btn.textContent = "Fejl"; btn.disabled = false;
+          }
+        };
+        card.querySelector(".right").appendChild(btn);
+        grid.appendChild(card);
+      }
+      root.replaceChildren(grid);
+    }
+
+    app.ontoolresult = ({ content }) => render(productsFrom(content));
+    await app.connect();
+  </script>
+</body>
+</html>"""
+
+
+def _register_apps() -> None:
+    """Register the interactive picker tool + UI resource (MCP Apps).
+
+    Gated behind NEMLIG_MCP_APPS so users can run a plain, conversational-only server.
+    """
+
+    @_tool(app=AppConfig(resource_uri=PICKER_URI))
+    def pick_products(query: str, limit: int = 8) -> list[Product]:
+        """Show the user an interactive picker to choose a product among candidates.
+
+        Prefer this over search_products when you want the user to choose — several options
+        are reasonable, or you're unsure which they'd prefer. Clients that render MCP Apps
+        show clickable cards (each 'Add' button adds that product); other clients fall back
+        to the same candidate list for conversational picking."""
+        return _search(query, limit)
+
+    @mcp.resource(
+        PICKER_URI,
+        app=AppConfig(csp=ResourceCSP(resource_domains=["https://unpkg.com"])),
+    )
+    def _picker_widget() -> str:
+        """Interactive product-picker UI (MCP Apps), rendered by `pick_products`."""
+        return _PICKER_HTML
+
+
+if _apps_enabled():
+    _register_apps()
 
 
 def main():
